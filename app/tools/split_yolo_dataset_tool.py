@@ -7,7 +7,7 @@ from typing import Optional
 
 from langchain.tools import tool
 
-from dataset_clean_tool import IMAGE_SUFFIXES
+from app.tools.dataset_clean_tool import IMAGE_SUFFIXES
 
 
 def _parse_ratio_pair(split_ratio: Optional[str]) -> tuple[int, int]:

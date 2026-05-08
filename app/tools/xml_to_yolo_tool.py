@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 
 from langchain.tools import tool
 
-from dataset_clean_tool import IMAGE_SUFFIXES, _extract_valid_xml_object, _list_files
+from app.tools.dataset_clean_tool import IMAGE_SUFFIXES, _extract_valid_xml_object, _list_files
 
 
 def _find_image_for_xml(xml_path: Path) -> Optional[Path]:

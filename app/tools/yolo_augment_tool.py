@@ -7,7 +7,7 @@ from typing import Optional
 from langchain.tools import tool
 from PIL import Image, ImageEnhance
 
-from dataset_clean_tool import IMAGE_SUFFIXES
+from app.tools.dataset_clean_tool import IMAGE_SUFFIXES
 
 Image.MAX_IMAGE_PIXELS = None
 

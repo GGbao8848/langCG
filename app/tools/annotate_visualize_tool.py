@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 from langchain.tools import tool
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
-from dataset_clean_tool import IMAGE_SUFFIXES, _extract_valid_xml_object
+from app.tools.dataset_clean_tool import IMAGE_SUFFIXES, _extract_valid_xml_object
 
 Image.MAX_IMAGE_PIXELS = None
 

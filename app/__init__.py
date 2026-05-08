@@ -1,0 +1,1 @@
+"""langCG application package."""
