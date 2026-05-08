@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.vscode/
+.idea/
+
+.DS_Store
+
+publish_workspace/
+*.zip

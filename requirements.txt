@@ -1,0 +1,7 @@
+langchain
+langchain-core
+langchain-ollama
+paramiko
+Pillow
+PyYAML
+python-dotenv
