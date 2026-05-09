@@ -1,5 +1,6 @@
 langchain
 langchain-core
+langchain-openai
 langchain-ollama
 paramiko
 Pillow

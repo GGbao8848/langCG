@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain_core.tools import StructuredTool
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.streaming import message_key, message_text, print_tool_calls, print_tool_result
@@ -22,6 +23,9 @@ load_dotenv()
 
 OLLAMA_URL = os.getenv("OLLAMA_URL")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL")
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
 
 def _handle_tool_error(error: Exception) -> str:
@@ -58,12 +62,33 @@ RAW_TOOLS = {
 
 TOOLS = {name: _make_safe_tool(tool) for name, tool in RAW_TOOLS.items()}
 
-llm = ChatOllama(
-    model=OLLAMA_MODEL,
-    base_url=OLLAMA_URL,
-    temperature=0,
-    max_tokens=None,
-)
+
+def _build_llm() -> ChatOpenAI | ChatOllama:
+    if OPENROUTER_API_KEY and OPENROUTER_MODEL:
+        return ChatOpenAI(
+            model=OPENROUTER_MODEL,
+            api_key=OPENROUTER_API_KEY,
+            base_url=OPENROUTER_BASE_URL,
+            temperature=0,
+            max_tokens=None,
+            stream_usage=False,
+        )
+
+    if OLLAMA_MODEL and OLLAMA_URL:
+        return ChatOllama(
+            model=OLLAMA_MODEL,
+            base_url=OLLAMA_URL,
+            temperature=0,
+            max_tokens=None,
+        )
+
+    raise RuntimeError(
+        "未找到可用模型配置。请在 .env 中配置 OPENROUTER_API_KEY + OPENROUTER_MODEL，"
+        "或配置 OLLAMA_URL + OLLAMA_MODEL。"
+    )
+
+
+llm = _build_llm()
 
 agent = create_agent(
     model=llm,
