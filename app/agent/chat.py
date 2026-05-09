@@ -3,6 +3,11 @@ from functools import lru_cache
 from typing import Any
 
 from dotenv import load_dotenv
+
+from app.langchain_compat import apply_langchain_compatibility_patches
+
+apply_langchain_compatibility_patches()
+
 from langchain.agents import create_agent
 from langchain_core.tools import StructuredTool
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
