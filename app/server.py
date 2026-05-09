@@ -1,0 +1,193 @@
+from __future__ import annotations
+
+import os
+from typing import Any, Literal
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from pydantic import BaseModel, Field
+
+from app.agent.chat import (
+    OLLAMA_MODEL,
+    OPENROUTER_MODEL,
+    TOOLS,
+    default_model_selection,
+    get_chat_agent,
+)
+from app.agent.streaming import message_key, message_text
+
+load_dotenv()
+
+
+class ChatMessageIn(BaseModel):
+    role: Literal["user", "assistant", "model"]
+    text: str = ""
+
+
+class ChatRequest(BaseModel):
+    provider: Literal["openrouter", "ollama"] | None = None
+    model: str | None = None
+    messages: list[ChatMessageIn] = Field(default_factory=list)
+
+
+class ToolCallOut(BaseModel):
+    id: str
+    name: str
+    args: dict[str, Any] | None = None
+    status: Literal["done", "error"] = "done"
+    result: Any | None = None
+
+
+class ChatResponse(BaseModel):
+    text: str
+    toolCalls: list[ToolCallOut] = Field(default_factory=list)
+
+
+app = FastAPI(title="langCG Agent API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def _split_env_list(name: str, fallback: list[str]) -> list[str]:
+    raw = os.getenv(name)
+    if not raw:
+        return [item for item in fallback if item]
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _to_langchain_messages(messages: list[ChatMessageIn]) -> list[BaseMessage]:
+    converted: list[BaseMessage] = []
+    for message in messages:
+        if not message.text:
+            continue
+        if message.role == "user":
+            converted.append(HumanMessage(content=message.text))
+        else:
+            converted.append(AIMessage(content=message.text))
+    return converted
+
+
+def _run_agent(history: list[BaseMessage], provider: str, model: str) -> ChatResponse:
+    agent = get_chat_agent(provider, model)
+    emitted_messages: list[BaseMessage] = []
+    seen_messages: set[tuple[Any, ...]] = set()
+
+    for chunk in agent.stream(
+        {"messages": history},
+        stream_mode=["updates"],
+        version="v2",
+    ):
+        if chunk["type"] != "updates":
+            continue
+
+        for _step_name, step_data in chunk["data"].items():
+            for message in step_data.get("messages", []):
+                current_message_key = message_key(message)
+                if current_message_key in seen_messages:
+                    continue
+                seen_messages.add(current_message_key)
+                emitted_messages.append(message)
+
+    tool_calls: dict[str, ToolCallOut] = {}
+    response_parts: list[str] = []
+
+    for message in emitted_messages:
+        if isinstance(message, AIMessage):
+            text = message_text(message.content)
+            if text:
+                response_parts.append(text)
+            for call in message.tool_calls:
+                call_id = str(call.get("id") or f"{call['name']}-{len(tool_calls)}")
+                tool_calls[call_id] = ToolCallOut(
+                    id=call_id,
+                    name=call["name"],
+                    args=call.get("args"),
+                    status="done",
+                )
+        elif isinstance(message, ToolMessage):
+            call_id = str(getattr(message, "tool_call_id", "") or getattr(message, "name", ""))
+            result = message_text(message.content)
+            if call_id and call_id in tool_calls:
+                tool_calls[call_id].result = result
+                continue
+            if call_id:
+                tool_calls[call_id] = ToolCallOut(
+                    id=call_id,
+                    name=getattr(message, "name", "tool"),
+                    status="done",
+                    result=result,
+                )
+
+    return ChatResponse(text="\n".join(response_parts).strip(), toolCalls=list(tool_calls.values()))
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/api/models")
+def models() -> dict[str, Any]:
+    default_provider, default_model = default_model_selection()
+    openrouter_models = _split_env_list(
+        "OPENROUTER_MODELS",
+        [OPENROUTER_MODEL or "", "openrouter/auto", "google/gemini-2.5-flash"],
+    )
+    ollama_models = _split_env_list("OLLAMA_MODELS", [OLLAMA_MODEL or ""])
+
+    return {
+        "default": {"provider": default_provider, "model": default_model},
+        "models": [
+            {"provider": "openrouter", "model": model, "label": f"OpenRouter: {model}"}
+            for model in openrouter_models
+        ]
+        + [
+            {"provider": "ollama", "model": model, "label": f"Ollama: {model}"}
+            for model in ollama_models
+        ],
+    }
+
+
+@app.get("/api/tools")
+def tools() -> dict[str, Any]:
+    return {
+        "tools": [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.args_schema.model_json_schema()
+                if tool.args_schema is not None
+                else {"type": "object", "properties": {}},
+            }
+            for tool in TOOLS.values()
+        ]
+    }
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+def chat(request: ChatRequest) -> ChatResponse:
+    try:
+        default_provider, default_model = default_model_selection()
+        provider = request.provider or default_provider
+        model = request.model or default_model
+        history = _to_langchain_messages(request.messages)
+        if not history:
+            raise HTTPException(status_code=400, detail="messages 不能为空。")
+        return _run_agent(history, provider, model)
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error

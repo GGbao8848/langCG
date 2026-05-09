@@ -1,4 +1,5 @@
 import os
+from functools import lru_cache
 from typing import Any
 
 from dotenv import load_dotenv
@@ -63,10 +64,32 @@ RAW_TOOLS = {
 TOOLS = {name: _make_safe_tool(tool) for name, tool in RAW_TOOLS.items()}
 
 
-def _build_llm() -> ChatOpenAI | ChatOllama:
+def default_model_selection() -> tuple[str, str]:
     if OPENROUTER_API_KEY and OPENROUTER_MODEL:
+        return "openrouter", OPENROUTER_MODEL
+    if OLLAMA_MODEL and OLLAMA_URL:
+        return "ollama", OLLAMA_MODEL
+    raise RuntimeError(
+        "未找到可用模型配置。请在 .env 中配置 OPENROUTER_API_KEY + OPENROUTER_MODEL，"
+        "或配置 OLLAMA_URL + OLLAMA_MODEL。"
+    )
+
+
+def _build_llm(
+    provider: str | None = None,
+    model: str | None = None,
+) -> ChatOpenAI | ChatOllama:
+    if provider is None or model is None:
+        default_provider, default_model = default_model_selection()
+        provider = provider or default_provider
+        model = model or default_model
+
+    if provider == "openrouter":
+        if not OPENROUTER_API_KEY:
+            raise RuntimeError("OPENROUTER_API_KEY 未配置，无法使用 OpenRouter。")
+
         return ChatOpenAI(
-            model=OPENROUTER_MODEL,
+            model=model,
             api_key=OPENROUTER_API_KEY,
             base_url=OPENROUTER_BASE_URL,
             temperature=0,
@@ -74,27 +97,32 @@ def _build_llm() -> ChatOpenAI | ChatOllama:
             stream_usage=False,
         )
 
-    if OLLAMA_MODEL and OLLAMA_URL:
+    if provider == "ollama":
+        if not OLLAMA_URL:
+            raise RuntimeError("OLLAMA_URL 未配置，无法使用 Ollama。")
+
         return ChatOllama(
-            model=OLLAMA_MODEL,
+            model=model,
             base_url=OLLAMA_URL,
             temperature=0,
             max_tokens=None,
         )
 
-    raise RuntimeError(
-        "未找到可用模型配置。请在 .env 中配置 OPENROUTER_API_KEY + OPENROUTER_MODEL，"
-        "或配置 OLLAMA_URL + OLLAMA_MODEL。"
+    raise RuntimeError(f"不支持的 LLM provider: {provider}")
+
+
+@lru_cache(maxsize=16)
+def get_chat_agent(provider: str | None = None, model: str | None = None) -> Any:
+    return create_agent(
+        model=_build_llm(provider, model),
+        tools=list(TOOLS.values()),
+        system_prompt=SYSTEM_PROMPT,
     )
 
 
 llm = _build_llm()
 
-agent = create_agent(
-    model=llm,
-    tools=list(TOOLS.values()),
-    system_prompt=SYSTEM_PROMPT,
-)
+agent = get_chat_agent()
 
 
 def _run_agent(history: list[BaseMessage]) -> list[BaseMessage]:
