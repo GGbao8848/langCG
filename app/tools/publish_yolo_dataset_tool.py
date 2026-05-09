@@ -179,22 +179,28 @@ def _collect_classes(input_dirs: list[Path]) -> list[str]:
 
 def _collect_split_dirs(dataset_root: Path) -> dict[str, list[Path]]:
     split_dirs: dict[str, list[Path]] = {}
+    seen: set[Path] = set()
+
+    def add_split_dir(split: str, images_dir: Path) -> None:
+        resolved = images_dir.resolve()
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        split_dirs.setdefault(split, []).append(resolved)
+
     direct_images = dataset_root / "images"
     if direct_images.is_dir():
-        split_dirs["train"] = [direct_images.resolve()]
-        return split_dirs
+        add_split_dir("train", direct_images)
 
     for split in _DEFAULT_SPLITS:
         images_dir = dataset_root / split / "images"
         if images_dir.is_dir():
-            split_dirs.setdefault(split, []).append(images_dir.resolve())
-    if split_dirs:
-        return split_dirs
+            add_split_dir(split, images_dir)
 
     for images_dir in sorted(p for p in dataset_root.rglob("images") if p.is_dir()):
         parent_name = images_dir.parent.name.lower()
         if parent_name in _DEFAULT_SPLITS:
-            split_dirs.setdefault(parent_name, []).append(images_dir.resolve())
+            add_split_dir(parent_name, images_dir)
     if not split_dirs:
         raise ValueError(f"在数据集根目录下未找到images目录: {dataset_root}")
     return split_dirs

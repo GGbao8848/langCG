@@ -1,5 +1,5 @@
 import React from "react";
-import { Bot, ChevronRight, Loader2, User, Wrench } from "lucide-react";
+import { Bot, ChevronRight, Loader2, OctagonX, User, Wrench } from "lucide-react";
 import { UIMessage } from "../types";
 
 export const ChatMessage: React.FC<{ msg: UIMessage; loggedInUser?: string | null }> = ({ msg, loggedInUser }) => {
@@ -8,7 +8,7 @@ export const ChatMessage: React.FC<{ msg: UIMessage; loggedInUser?: string | nul
       className={`flex flex-col w-full ${msg.role === "user" ? "items-end" : "items-start"}`}
     >
       <div
-        className={`flex max-w-[85%] sm:max-w-5xl gap-3 ${
+        className={`flex max-w-[86%] gap-3 sm:max-w-[70%] xl:max-w-[64%] ${
           msg.role === "user" ? "flex-row-reverse" : "flex-row"
         }`}
       >
@@ -32,10 +32,10 @@ export const ChatMessage: React.FC<{ msg: UIMessage; loggedInUser?: string | nul
         </div>
 
         {/* Content Bubble */}
-        <div className="flex flex-col justify-start space-y-2 min-w-0">
+        <div className="flex min-w-0 max-w-full flex-col justify-start space-y-2">
           {/* Tool Invocations Box */}
           {msg.toolCalls && msg.toolCalls.length > 0 && (
-            <div className="flex flex-col space-y-2 w-full min-w-0 sm:min-w-[280px]">
+            <div className="flex w-full min-w-0 flex-col space-y-2 sm:min-w-[280px]">
               {msg.toolCalls.map((tc) => {
                 let statusConfig = {
                   border: "border-slate-200",
@@ -67,6 +67,16 @@ export const ChatMessage: React.FC<{ msg: UIMessage; loggedInUser?: string | nul
                     text: "Failed",
                     badgeTextColor: "text-red-600",
                   };
+                } else if (tc.status === "canceled") {
+                  statusConfig = {
+                    border: "border-slate-200",
+                    summaryBg: "bg-slate-50",
+                    summaryHoverBg: "hover:bg-slate-100",
+                    textColor: "text-slate-600",
+                    iconColor: "text-slate-400",
+                    text: "Canceled",
+                    badgeTextColor: "text-slate-500",
+                  };
                 } else if (tc.status === "success" || tc.status === "done") {
                   statusConfig = {
                     border: "border-emerald-200",
@@ -80,13 +90,14 @@ export const ChatMessage: React.FC<{ msg: UIMessage; loggedInUser?: string | nul
                 }
 
                 return (
-                <details key={tc.id} className={`bg-white border ${statusConfig.border} rounded-xl shadow-sm text-sm group transition-colors`}>
+                <details key={tc.id} className={`max-w-full bg-white border ${statusConfig.border} rounded-xl shadow-sm text-sm group transition-colors`}>
                   <summary className={`${statusConfig.summaryBg} px-3 py-2 font-medium ${statusConfig.textColor} flex items-center text-xs cursor-pointer select-none outline-none group-open:border-b group-open:${statusConfig.border} list-none [&::-webkit-details-marker]:hidden rounded-xl group-open:rounded-b-none transition-colors ${statusConfig.summaryHoverBg}`}>
                     <ChevronRight className={`w-3.5 h-3.5 mr-1 transition-transform group-open:rotate-90 ${statusConfig.iconColor}`} />
                     <Wrench className={`w-3.5 h-3.5 mr-1.5 ${statusConfig.iconColor}`} />
                     <span className="font-mono tracking-wide">{tc.name}</span>
                     <span className={`ml-auto font-medium flex items-center ${statusConfig.badgeTextColor} ${tc.status === 'running' ? 'animate-pulse' : ''}`}>
                       {tc.status === "running" && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
+                      {tc.status === "canceled" && <OctagonX className="w-3 h-3 mr-1" />}
                       {statusConfig.text}
                     </span>
                   </summary>
@@ -97,12 +108,12 @@ export const ChatMessage: React.FC<{ msg: UIMessage; loggedInUser?: string | nul
                           {tc.name}
                         </span>
                       </div>
-                      <div className="text-xs font-mono bg-slate-50 text-slate-500 p-2 rounded -mx-1 mt-2 mb-1 overflow-x-auto whitespace-pre-wrap word-break">
+                      <div className="max-w-full text-xs font-mono bg-slate-50 text-slate-500 p-2 rounded -mx-1 mt-2 mb-1 overflow-x-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
                         <span className="text-slate-400 select-none">Args:</span>{" "}
                         {JSON.stringify(tc.args)}
                       </div>
                       {tc.status !== "running" && tc.result && (
-                        <div className="text-xs font-mono bg-emerald-50 text-emerald-700 p-2 rounded -mx-1 mt-1 border border-emerald-100 overflow-x-auto whitespace-pre-wrap word-break">
+                        <div className="max-w-full text-xs font-mono bg-emerald-50 text-emerald-700 p-2 rounded -mx-1 mt-1 border border-emerald-100 overflow-x-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
                           <span className="text-emerald-600 font-medium select-none">Result:</span>{" "}
                           {JSON.stringify(tc.result)}
                         </div>
@@ -118,7 +129,7 @@ export const ChatMessage: React.FC<{ msg: UIMessage; loggedInUser?: string | nul
           {/* Text Message */}
           {msg.text && (
             <div
-              className={`px-4 py-2.5 rounded-2xl whitespace-pre-wrap relative shadow-sm ${
+              className={`max-w-full px-4 py-2.5 rounded-2xl whitespace-pre-wrap break-words [overflow-wrap:anywhere] relative shadow-sm ${
                 msg.role === "user"
                   ? "bg-indigo-600 text-white rounded-tr-sm"
                   : "bg-white border border-slate-200 text-slate-800 rounded-tl-sm"

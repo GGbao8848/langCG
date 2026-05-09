@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import json
 import os
+from collections.abc import Iterator
 from typing import Any, Literal
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel, Field
 
 from app.agent.chat import (
+    OLLAMA_URL,
     OLLAMA_MODEL,
     OPENROUTER_MODEL,
     TOOLS,
@@ -66,6 +72,31 @@ def _split_env_list(name: str, fallback: list[str]) -> list[str]:
     if not raw:
         return [item for item in fallback if item]
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _fetch_ollama_models() -> list[str]:
+    if not OLLAMA_URL:
+        return [OLLAMA_MODEL] if OLLAMA_MODEL else []
+
+    base_url = OLLAMA_URL.rstrip("/")
+    try:
+        with urlopen(f"{base_url}/api/tags", timeout=2) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, URLError, TimeoutError, json.JSONDecodeError):
+        return [OLLAMA_MODEL] if OLLAMA_MODEL else []
+
+    models = payload.get("models")
+    if not isinstance(models, list):
+        return [OLLAMA_MODEL] if OLLAMA_MODEL else []
+
+    names = []
+    for item in models:
+        if isinstance(item, dict) and isinstance(item.get("name"), str):
+            names.append(item["name"])
+
+    if OLLAMA_MODEL and OLLAMA_MODEL not in names:
+        names.insert(0, OLLAMA_MODEL)
+    return names
 
 
 def _to_langchain_messages(messages: list[ChatMessageIn]) -> list[BaseMessage]:
@@ -134,6 +165,78 @@ def _run_agent(history: list[BaseMessage], provider: str, model: str) -> ChatRes
     return ChatResponse(text="\n".join(response_parts).strip(), toolCalls=list(tool_calls.values()))
 
 
+def _sse(event: str, data: dict[str, Any]) -> str:
+    payload = json.dumps(data, ensure_ascii=False)
+    return f"event: {event}\ndata: {payload}\n\n"
+
+
+def _stream_agent_events(history: list[BaseMessage], provider: str, model: str) -> Iterator[str]:
+    agent = get_chat_agent(provider, model)
+    seen_messages: set[tuple[Any, ...]] = set()
+    response_parts: list[str] = []
+
+    yield _sse("metadata", {"provider": provider, "model": model})
+
+    try:
+        for chunk in agent.stream(
+            {"messages": history},
+            stream_mode=["messages", "updates"],
+            version="v2",
+        ):
+            if chunk["type"] == "messages":
+                token, metadata = chunk["data"]
+                if metadata.get("langgraph_node") != "model":
+                    continue
+                text = message_text(token.content)
+                if text:
+                    response_parts.append(text)
+                    yield _sse("token", {"text": text})
+                continue
+
+            if chunk["type"] != "updates":
+                continue
+
+            for _step_name, step_data in chunk["data"].items():
+                for message in step_data.get("messages", []):
+                    current_message_key = message_key(message)
+                    if current_message_key in seen_messages:
+                        continue
+                    seen_messages.add(current_message_key)
+
+                    if isinstance(message, AIMessage):
+                        text = message_text(message.content)
+                        if text and not response_parts:
+                            response_parts.append(text)
+                            yield _sse("token", {"text": text})
+                        for index, call in enumerate(message.tool_calls):
+                            call_id = str(call.get("id") or f"{call['name']}-{index}")
+                            yield _sse(
+                                "tool_call",
+                                {
+                                    "id": call_id,
+                                    "name": call["name"],
+                                    "args": call.get("args"),
+                                    "status": "running",
+                                },
+                            )
+                    elif isinstance(message, ToolMessage):
+                        call_id = str(getattr(message, "tool_call_id", "") or getattr(message, "name", "tool"))
+                        result = message_text(message.content)
+                        yield _sse(
+                            "tool_result",
+                            {
+                                "id": call_id,
+                                "name": getattr(message, "name", "tool"),
+                                "result": result,
+                                "status": "error" if result.startswith("tool执行失败") else "done",
+                            },
+                        )
+
+        yield _sse("done", {"text": "".join(response_parts).strip()})
+    except Exception as error:
+        yield _sse("error", {"message": str(error)})
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -146,7 +249,7 @@ def models() -> dict[str, Any]:
         "OPENROUTER_MODELS",
         [OPENROUTER_MODEL or "", "openrouter/auto", "google/gemini-2.5-flash"],
     )
-    ollama_models = _split_env_list("OLLAMA_MODELS", [OLLAMA_MODEL or ""])
+    ollama_models = _fetch_ollama_models()
 
     return {
         "default": {"provider": default_provider, "model": default_model},
@@ -187,6 +290,29 @@ def chat(request: ChatRequest) -> ChatResponse:
         if not history:
             raise HTTPException(status_code=400, detail="messages 不能为空。")
         return _run_agent(history, provider, model)
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@app.post("/api/chat/stream")
+def chat_stream(request: ChatRequest) -> StreamingResponse:
+    try:
+        default_provider, default_model = default_model_selection()
+        provider = request.provider or default_provider
+        model = request.model or default_model
+        history = _to_langchain_messages(request.messages)
+        if not history:
+            raise HTTPException(status_code=400, detail="messages 不能为空。")
+        return StreamingResponse(
+            _stream_agent_events(history, provider, model),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
     except HTTPException:
         raise
     except Exception as error:
