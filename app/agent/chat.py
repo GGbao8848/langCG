@@ -106,6 +106,8 @@ def _build_llm(
             base_url=OLLAMA_URL,
             temperature=0,
             max_tokens=None,
+            client_kwargs={"trust_env": False},
+            sync_client_kwargs={"trust_env": False},
         )
 
     raise RuntimeError(f"不支持的 LLM provider: {provider}")
