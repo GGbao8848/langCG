@@ -9,7 +9,7 @@ from app.langchain_compat import apply_langchain_compatibility_patches
 apply_langchain_compatibility_patches()
 
 from langchain.agents import create_agent
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import BaseTool, StructuredTool
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
@@ -22,6 +22,7 @@ from app.tools.split_yolo_dataset_tool import split_yolo_dataset
 from app.tools.yolo_reindex_tool import reindex_yolo_labels
 from app.tools.xml_to_yolo_tool import convert_xml_to_yolo
 from app.tools.dataset_clean_tool import clean_irregular_dataset
+from app.tools.filesystem_toolkit import get_filesystem_tools
 from app.tools.yolo_sliding_window_tool import yolo_sliding_window_crop
 
 
@@ -38,7 +39,7 @@ def _handle_tool_error(error: Exception) -> str:
     return f"tool执行失败: {error}"
 
 
-def _make_safe_tool(tool: StructuredTool) -> StructuredTool:
+def _make_safe_tool(tool: BaseTool) -> StructuredTool:
     def _safe_func(**kwargs: Any) -> str:
         try:
             result = tool.invoke(kwargs)
@@ -65,6 +66,9 @@ RAW_TOOLS = {
     split_yolo_dataset.name: split_yolo_dataset,
     yolo_sliding_window_crop.name: yolo_sliding_window_crop,
 }
+
+for filesystem_tool in get_filesystem_tools():
+    RAW_TOOLS[filesystem_tool.name] = filesystem_tool
 
 TOOLS = {name: _make_safe_tool(tool) for name, tool in RAW_TOOLS.items()}
 
