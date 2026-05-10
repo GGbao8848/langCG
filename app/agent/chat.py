@@ -13,6 +13,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
+from app.agent.middleware import build_agent_middleware
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.streaming import message_key, message_text, print_tool_calls, print_tool_result
 from app.tools.annotate_visualize_tool import annotate_visualize
@@ -124,10 +125,15 @@ def _build_llm(
 
 @lru_cache(maxsize=16)
 def get_chat_agent(provider: str | None = None, model: str | None = None) -> Any:
+    llm = _build_llm(provider, model)
     return create_agent(
-        model=_build_llm(provider, model),
+        model=llm,
         tools=list(TOOLS.values()),
         system_prompt=SYSTEM_PROMPT,
+        middleware=build_agent_middleware(
+            summary_model=llm,
+            tool_selector_model=llm,
+        ),
     )
 
 
@@ -157,8 +163,14 @@ def _run_agent(history: list[BaseMessage]) -> list[BaseMessage]:
         if chunk["type"] != "updates":
             continue
 
-        for _step_name, step_data in chunk["data"].items():
-            for message in step_data.get("messages", []):
+        data = chunk.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+
+        for _step_name, step_data in data.items():
+            if not isinstance(step_data, dict):
+                continue
+            for message in step_data.get("messages") or []:
                 current_message_key = message_key(message)
                 if current_message_key in seen_messages:
                     continue

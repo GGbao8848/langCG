@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel, Field
 
+from app.agent.middleware import middleware_names
 from app.agent.chat import (
     OLLAMA_URL,
     OLLAMA_MODEL,
@@ -152,8 +153,14 @@ def _run_agent(history: list[BaseMessage], provider: str, model: str) -> ChatRes
         if chunk["type"] != "updates":
             continue
 
-        for _step_name, step_data in chunk["data"].items():
-            for message in step_data.get("messages", []):
+        data = chunk.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+
+        for _step_name, step_data in data.items():
+            if not isinstance(step_data, dict):
+                continue
+            for message in step_data.get("messages") or []:
                 current_message_key = message_key(message)
                 if current_message_key in seen_messages:
                     continue
@@ -213,7 +220,7 @@ def _stream_agent_events(history: list[BaseMessage], provider: str, model: str) 
         ):
             if chunk["type"] == "messages":
                 token, metadata = chunk["data"]
-                if metadata.get("langgraph_node") != "model":
+                if not isinstance(metadata, dict) or metadata.get("langgraph_node") != "model":
                     continue
                 text = message_text(token.content)
                 if text:
@@ -224,8 +231,14 @@ def _stream_agent_events(history: list[BaseMessage], provider: str, model: str) 
             if chunk["type"] != "updates":
                 continue
 
-            for _step_name, step_data in chunk["data"].items():
-                for message in step_data.get("messages", []):
+            data = chunk.get("data") or {}
+            if not isinstance(data, dict):
+                continue
+
+            for _step_name, step_data in data.items():
+                if not isinstance(step_data, dict):
+                    continue
+                for message in step_data.get("messages") or []:
                     current_message_key = message_key(message)
                     if current_message_key in seen_messages:
                         continue
@@ -306,6 +319,11 @@ def tools() -> dict[str, Any]:
             for tool in TOOLS.values()
         ]
     }
+
+
+@app.get("/api/middleware")
+def middleware() -> dict[str, Any]:
+    return {"middleware": middleware_names()}
 
 
 @app.get("/api/chat/state")
