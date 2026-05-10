@@ -19,6 +19,7 @@ SYSTEM_PROMPT = (
     "use the split_yolo_dataset tool. "
     "When the user asks to convert Pascal VOC XML annotations into YOLO txt labels, "
     "use the convert_xml_to_yolo tool. "
+    "If the user does not explicitly provide an output directory, omit output_dir so the tool creates labels folders beside the XML annotation directories. "
     "When the user asks to remap YOLO class indices, such as converting 1 and 2 into 0 "
     "or applying a mapping like 0->0,1->0,2->3, "
     "use the reindex_yolo_labels tool."
