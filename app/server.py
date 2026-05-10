@@ -23,6 +23,7 @@ from app.agent.chat import (
     get_chat_agent,
 )
 from app.agent.streaming import message_key, message_text
+from app.services.chat_store import init_chat_store, load_chat_state, save_chat_state
 
 load_dotenv()
 
@@ -51,6 +52,34 @@ class ChatResponse(BaseModel):
     toolCalls: list[ToolCallOut] = Field(default_factory=list)
 
 
+class PersistedToolCall(BaseModel):
+    id: str
+    name: str
+    args: Any | None = None
+    status: str = "done"
+    result: Any | None = None
+
+
+class PersistedUIMessage(BaseModel):
+    id: str
+    role: Literal["user", "model"]
+    text: str = ""
+    toolCalls: list[PersistedToolCall] = Field(default_factory=list)
+
+
+class PersistedChatSession(BaseModel):
+    id: str
+    name: str
+    messages: list[PersistedUIMessage] = Field(default_factory=list)
+    updatedAt: int
+
+
+class PersistedChatState(BaseModel):
+    sessions: list[PersistedChatSession] = Field(default_factory=list)
+    currentSessionId: str = ""
+    savedAt: int = 0
+
+
 app = FastAPI(title="langCG Agent API")
 
 app.add_middleware(
@@ -62,6 +91,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+init_chat_store()
 
 
 def _split_env_list(name: str, fallback: list[str]) -> list[str]:
@@ -275,6 +306,23 @@ def tools() -> dict[str, Any]:
             for tool in TOOLS.values()
         ]
     }
+
+
+@app.get("/api/chat/state")
+def get_chat_state() -> dict[str, Any]:
+    try:
+        return load_chat_state()
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@app.put("/api/chat/state")
+def put_chat_state(state: PersistedChatState) -> dict[str, str]:
+    try:
+        save_chat_state(state.model_dump(mode="json"))
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+    return {"status": "ok"}
 
 
 @app.post("/api/chat", response_model=ChatResponse)

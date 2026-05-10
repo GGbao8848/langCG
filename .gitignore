@@ -9,3 +9,5 @@ __pycache__/
 
 publish_workspace/
 *.zip
+data/*.sqlite
+data/*.sqlite-*

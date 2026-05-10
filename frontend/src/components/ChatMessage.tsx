@@ -8,7 +8,7 @@ export const ChatMessage: React.FC<{ msg: UIMessage; loggedInUser?: string | nul
       className={`flex flex-col w-full ${msg.role === "user" ? "items-end" : "items-start"}`}
     >
       <div
-        className={`flex max-w-[86%] gap-3 sm:max-w-[70%] xl:max-w-[64%] ${
+        className={`flex max-w-[95%] gap-3 sm:max-w-[93%] xl:max-w-[85%] ${
           msg.role === "user" ? "flex-row-reverse" : "flex-row"
         }`}
       >

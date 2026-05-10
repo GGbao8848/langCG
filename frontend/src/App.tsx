@@ -4,6 +4,7 @@ import { ChatMessage } from "./components/ChatMessage";
 import { ChatSidebar } from "./components/ChatSidebar";
 import { ToolSidebar } from "./components/ToolSidebar";
 import { fetchModels, fetchTools, streamChat } from "./services/agentApi";
+import { loadPersistedChatState, savePersistedChatState, type PersistedChatState } from "./services/chatStorage";
 import { AgentStreamEvent, ChatModelOption, ChatSession, ToolCallData, UIMessage } from "./types";
 
 const newSession = (): ChatSession => ({
@@ -14,48 +15,32 @@ const newSession = (): ChatSession => ({
 });
 
 const selectionKey = (provider: string, model: string) => `${provider}::${model}`;
-const SESSIONS_STORAGE_KEY = "langcg.sessions";
-const CURRENT_SESSION_STORAGE_KEY = "langcg.currentSessionId";
-
-function loadStoredSessions(): ChatSession[] {
-  try {
-    const raw = localStorage.getItem(SESSIONS_STORAGE_KEY);
-    if (!raw) return [newSession()];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || parsed.length === 0) return [newSession()];
-    const sessions = parsed
-      .filter((session): session is ChatSession => {
-        return (
-          typeof session?.id === "string" &&
-          typeof session?.name === "string" &&
-          typeof session?.updatedAt === "number" &&
-          Array.isArray(session?.messages)
-        );
-      })
-      .map((session) => ({
-        ...session,
-        messages: session.messages.filter((message) => {
-          return message?.role === "user" || message?.role === "model";
-        }),
-      }));
-    return sessions.length > 0 ? normalizeSessionsForStorage(sessions) : [newSession()];
-  } catch {
-    return [newSession()];
-  }
-}
 
 function normalizeSessionsForStorage(sessions: ChatSession[]): ChatSession[] {
-  return sessions.map((session) => ({
-    ...session,
-    messages: session.messages.map((message) => ({
-      ...message,
-      toolCalls: message.toolCalls?.map((toolCall) =>
-        toolCall.status === "running"
-          ? { ...toolCall, status: "canceled" as const, result: toolCall.result ?? "刷新时已中止" }
-          : toolCall,
-      ),
-    })),
-  }));
+  const normalized = sessions
+    .filter((session): session is ChatSession => {
+      return (
+        typeof session?.id === "string" &&
+        typeof session?.name === "string" &&
+        typeof session?.updatedAt === "number" &&
+        Array.isArray(session?.messages)
+      );
+    })
+    .map((session) => ({
+      ...session,
+      messages: session.messages
+        .filter((message) => message?.role === "user" || message?.role === "model")
+        .map((message) => ({
+          ...message,
+          toolCalls: message.toolCalls?.map((toolCall) =>
+            toolCall.status === "running"
+              ? { ...toolCall, status: "canceled" as const, result: toolCall.result ?? "刷新时已中止" }
+              : toolCall,
+          ),
+        })),
+    }));
+
+  return normalized.length > 0 ? normalized : [newSession()];
 }
 
 function writeStorage(key: string, value: string) {
@@ -67,10 +52,9 @@ function writeStorage(key: string, value: string) {
 }
 
 export default function App() {
-  const [sessions, setSessions] = useState<ChatSession[]>(loadStoredSessions);
-  const [currentSessionId, setCurrentSessionId] = useState<string>(() => {
-    return localStorage.getItem(CURRENT_SESSION_STORAGE_KEY) ?? "";
-  });
+  const [sessions, setSessions] = useState<ChatSession[]>(() => [newSession()]);
+  const [currentSessionId, setCurrentSessionId] = useState<string>(() => "");
+  const [isPersistenceReady, setIsPersistenceReady] = useState(false);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isChatSidebarOpen, setIsChatSidebarOpen] = useState(true);
@@ -83,6 +67,7 @@ export default function App() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeAbortControllerRef = useRef<AbortController | null>(null);
+  const latestPersistenceStateRef = useRef<PersistedChatState | null>(null);
 
   const currentSession = sessions.find((session) => session.id === currentSessionId) ?? sessions[0];
   const lastMessage = currentSession.messages[currentSession.messages.length - 1];
@@ -106,14 +91,63 @@ export default function App() {
   }, [sessions]);
 
   useEffect(() => {
-    writeStorage(SESSIONS_STORAGE_KEY, JSON.stringify(normalizeSessionsForStorage(sessions)));
-  }, [sessions]);
+    let isMounted = true;
+
+    loadPersistedChatState()
+      .then((state) => {
+        if (!isMounted) return;
+        if (!state) {
+          setIsPersistenceReady(true);
+          return;
+        }
+
+        const normalizedSessions = normalizeSessionsForStorage(state.sessions);
+        setSessions(normalizedSessions);
+        setCurrentSessionId(
+          normalizedSessions.some((session) => session.id === state.currentSessionId)
+            ? state.currentSessionId
+            : normalizedSessions[0].id,
+        );
+        setIsPersistenceReady(true);
+      })
+      .catch((error) => {
+        console.warn("Failed to initialize chat persistence", error);
+        if (isMounted) setIsPersistenceReady(true);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   useEffect(() => {
-    if (currentSessionId) {
-      writeStorage(CURRENT_SESSION_STORAGE_KEY, currentSessionId);
-    }
-  }, [currentSessionId]);
+    if (!isPersistenceReady || !currentSessionId) return;
+
+    const persistedState = {
+      sessions: normalizeSessionsForStorage(sessions),
+      currentSessionId,
+      savedAt: Date.now(),
+    };
+    latestPersistenceStateRef.current = persistedState;
+
+    const saveTimer = window.setTimeout(() => {
+      savePersistedChatState(persistedState);
+    }, 250);
+
+    return () => window.clearTimeout(saveTimer);
+  }, [currentSessionId, isPersistenceReady, sessions]);
+
+  useEffect(() => {
+    const flushLatestState = () => {
+      const state = latestPersistenceStateRef.current;
+      if (state) {
+        savePersistedChatState({ ...state, savedAt: Date.now() });
+      }
+    };
+
+    window.addEventListener("pagehide", flushLatestState);
+    return () => window.removeEventListener("pagehide", flushLatestState);
+  }, []);
 
   useEffect(() => {
     fetchModels()
