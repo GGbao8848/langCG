@@ -14,14 +14,21 @@ interface ChatSidebarProps {
   activeModelLabel?: string;
   userSettings: UserSettings;
   isUserSettingsComplete: boolean;
-  isSavingUserSettings: boolean;
+  isSavingRemoteUserSettings: boolean;
+  isSavingYoloEnvironment: boolean;
   isTestingUserSettings: boolean;
+  isTestingYoloEnvironment: boolean;
   isUserSettingsTestPassed: boolean;
   isUserSettingsSaved: boolean;
+  isYoloEnvironmentTestPassed: boolean;
+  isYoloEnvironmentSaved: boolean;
   userSettingsStatus: string;
+  yoloEnvironmentStatus: string;
   onUserSettingsChange: (settings: UserSettings) => void;
   onTestUserSettings: () => void;
+  onTestYoloEnvironment: () => void;
   onSaveUserSettings: () => void;
+  onSaveYoloEnvironment: () => void;
 }
 
 export const ChatSidebar: React.FC<ChatSidebarProps> = ({
@@ -36,19 +43,27 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   activeModelLabel,
   userSettings,
   isUserSettingsComplete,
-  isSavingUserSettings,
+  isSavingRemoteUserSettings,
+  isSavingYoloEnvironment,
   isTestingUserSettings,
+  isTestingYoloEnvironment,
   isUserSettingsTestPassed,
   isUserSettingsSaved,
+  isYoloEnvironmentTestPassed,
+  isYoloEnvironmentSaved,
   userSettingsStatus,
+  yoloEnvironmentStatus,
   onUserSettingsChange,
   onTestUserSettings,
+  onTestYoloEnvironment,
   onSaveUserSettings,
+  onSaveYoloEnvironment,
 }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [menuPos, setMenuPos] = useState<{ id: string, top: number, left: number } | null>(null);
-  const [isUserSettingsCollapsed, setIsUserSettingsCollapsed] = useState(false);
+  const [isUserSettingsCollapsed, setIsUserSettingsCollapsed] = useState(true);
+  const [isYoloEnvironmentCollapsed, setIsYoloEnvironmentCollapsed] = useState(true);
 
   const startEditing = (id: string, currentName: string) => {
     setEditingId(id);
@@ -67,8 +82,13 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   const userSettingsCardClass = isUserSettingsComplete
     ? isUserSettingsTestPassed
       ? "border-emerald-200 bg-emerald-50/60"
-      : "border-amber-200 bg-amber-50/60"
+      : "border-red-300 bg-red-50/80"
     : "border-red-300 bg-red-50/80";
+  const hasYoloEnvironment = Boolean(userSettings.local_yolo_train_venv_path.trim());
+  const yoloEnvironmentCardClass =
+    hasYoloEnvironment && isYoloEnvironmentTestPassed
+      ? "border-emerald-200 bg-emerald-50/60"
+      : "border-red-300 bg-red-50/80";
   const userSettingsInputClass = (isFilled: boolean) =>
     `mt-1 w-full rounded-lg border px-2 py-1.5 text-xs text-slate-800 outline-none focus:ring-1 ${
       isFilled
@@ -82,18 +102,25 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
         : "已测试，待保存"
       : "待测试"
     : "信息未填写完整";
-
-  useEffect(() => {
-    if (!isUserSettingsComplete || isTestingUserSettings) {
-      setIsUserSettingsCollapsed(false);
-    }
-  }, [isTestingUserSettings, isUserSettingsComplete]);
+  const yoloEnvironmentSubtitle = hasYoloEnvironment
+    ? isYoloEnvironmentTestPassed
+      ? isYoloEnvironmentSaved
+        ? "已测试并保存"
+        : "已测试，待保存"
+      : "待测试"
+    : "未配置";
 
   useEffect(() => {
     if (isUserSettingsSaved && isUserSettingsTestPassed) {
       setIsUserSettingsCollapsed(true);
     }
   }, [isUserSettingsSaved, isUserSettingsTestPassed]);
+
+  useEffect(() => {
+    if (isYoloEnvironmentSaved && isYoloEnvironmentTestPassed) {
+      setIsYoloEnvironmentCollapsed(true);
+    }
+  }, [isYoloEnvironmentSaved, isYoloEnvironmentTestPassed]);
 
   return (
     <div style={{ width: isOpen ? '280px' : '0' }} className="bg-slate-50 border-r border-slate-200 transition-all duration-300 flex flex-col shrink-0 overflow-hidden relative z-30">
@@ -234,9 +261,13 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                 </span>
                 <div className="min-w-0">
                   <div className="text-sm font-semibold text-slate-800">用户信息</div>
-                  {isUserSettingsCollapsed && isUserSettingsComplete && (
-                    <div className="truncate text-[10px] text-slate-500">
-                      {userSettings.remote_sftp_username}@{userSettings.remote_sftp_host}:{userSettings.remote_sftp_port}
+                  {isUserSettingsCollapsed && (
+                    <div className={`truncate text-[10px] ${isUserSettingsTestPassed ? "text-emerald-700" : "text-red-600"}`}>
+                      {isUserSettingsComplete
+                        ? isUserSettingsTestPassed
+                          ? `${userSettings.remote_sftp_username}@${userSettings.remote_sftp_host}:${userSettings.remote_sftp_port}`
+                          : userSettingsSubtitle
+                        : "信息未填写完整"}
                     </div>
                   )}
                 </div>
@@ -245,17 +276,17 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                 <div className="flex items-center gap-1.5">
                   <button
                     onClick={onTestUserSettings}
-                    disabled={!isUserSettingsComplete || isTestingUserSettings || isSavingUserSettings}
+                    disabled={!isUserSettingsComplete || isTestingUserSettings || isSavingRemoteUserSettings}
                     className="rounded-lg bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500"
                   >
                     {isTestingUserSettings ? "测试中" : "测试"}
                   </button>
                   <button
                     onClick={onSaveUserSettings}
-                    disabled={!isUserSettingsComplete || !isUserSettingsTestPassed || isSavingUserSettings || isTestingUserSettings}
+                    disabled={isSavingRemoteUserSettings || isTestingUserSettings}
                     className="rounded-lg bg-slate-900 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-slate-700 disabled:bg-slate-300 disabled:text-slate-500"
                   >
-                    {isSavingUserSettings ? "保存中" : "保存"}
+                    {isSavingRemoteUserSettings ? "保存中" : "保存"}
                   </button>
                 </div>
               )}
@@ -318,12 +349,82 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
             </div>
             <div
               className={`mt-2 text-[10px] ${
-                isUserSettingsTestPassed ? "text-emerald-700" : isUserSettingsComplete ? "text-amber-700" : "text-red-600"
+                isUserSettingsTestPassed ? "text-emerald-700" : "text-red-600"
               }`}
             >
               {userSettingsStatus ||
                 (isUserSettingsComplete ? "请先点击测试，联通正常后才能保存" : "请填写完整后再测试")}
             </div>
+              </>
+            )}
+          </div>
+
+          <div className={`mt-3 rounded-2xl border p-3 shadow-sm transition-colors ${yoloEnvironmentCardClass}`}>
+            <div className={`flex items-center justify-between ${isYoloEnvironmentCollapsed ? "" : "mb-2"}`}>
+              <button
+                type="button"
+                onClick={() => setIsYoloEnvironmentCollapsed((collapsed) => !collapsed)}
+                className="flex min-w-0 flex-1 items-center text-left focus:outline-none"
+              >
+                <span className="mr-1.5 shrink-0 text-slate-500">
+                  {isYoloEnvironmentCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                </span>
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-slate-800">环境变量</div>
+                  {isYoloEnvironmentCollapsed && (
+                    <div className={`truncate text-[10px] ${isYoloEnvironmentTestPassed ? "text-emerald-700" : "text-red-600"}`}>
+                      {hasYoloEnvironment ? yoloEnvironmentSubtitle : "本地训练运行环境"}
+                    </div>
+                  )}
+                </div>
+              </button>
+              {!isYoloEnvironmentCollapsed && (
+                <div className="flex items-center gap-1.5">
+                <button
+                  onClick={onTestYoloEnvironment}
+                  disabled={
+                    !hasYoloEnvironment ||
+                    isTestingYoloEnvironment ||
+                    isSavingYoloEnvironment
+                  }
+                  className="rounded-lg bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500"
+                >
+                  {isTestingYoloEnvironment ? "测试中" : "测试"}
+                </button>
+                <button
+                  onClick={onSaveYoloEnvironment}
+                  disabled={isSavingYoloEnvironment || isTestingYoloEnvironment}
+                  className="rounded-lg bg-slate-900 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-slate-700 disabled:bg-slate-300 disabled:text-slate-500"
+                >
+                  {isSavingYoloEnvironment ? "保存中" : "保存"}
+                </button>
+              </div>
+              )}
+            </div>
+            {!isYoloEnvironmentCollapsed && (
+              <>
+                <div className={`text-[10px] ${isYoloEnvironmentTestPassed ? "text-emerald-700" : "text-red-500"}`}>
+                  {yoloEnvironmentSubtitle}
+                </div>
+                <label className="mt-2 block text-[11px] font-medium text-slate-500">
+                  YOLO训练虚拟环境
+                  <input
+                    value={userSettings.local_yolo_train_venv_path}
+                    placeholder="/path/to/venv 或 /path/to/venv/bin/yolo"
+                    onChange={(event) =>
+                      onUserSettingsChange({ ...userSettings, local_yolo_train_venv_path: event.target.value })
+                    }
+                    className={`${userSettingsInputClass(true)} placeholder:text-slate-300`}
+                  />
+                </label>
+                <div className={`mt-2 text-[10px] ${isYoloEnvironmentTestPassed ? "text-emerald-700" : "text-red-600"}`}>
+                  {yoloEnvironmentStatus ||
+                    (hasYoloEnvironment
+                      ? isYoloEnvironmentSaved
+                        ? "已保存"
+                        : "点击测试验证Ultralytics YOLO CLI是否可用"
+                      : "未配置时，本地yaml训练会要求先填写该路径")}
+                </div>
               </>
             )}
           </div>

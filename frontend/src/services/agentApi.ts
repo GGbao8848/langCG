@@ -48,6 +48,13 @@ export async function testUserSettings(settings: UserSettings): Promise<UserSett
   });
 }
 
+export async function testYoloEnvironment(settings: UserSettings): Promise<UserSettingsTestResult> {
+  return requestJson("/api/user-settings/test-yolo-env", {
+    method: "POST",
+    body: JSON.stringify(settings),
+  });
+}
+
 export async function streamChat(
   params: {
     provider: string;

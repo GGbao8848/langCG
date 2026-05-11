@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ChatMessage } from "./components/ChatMessage";
 import { ChatSidebar } from "./components/ChatSidebar";
 import { ToolSidebar } from "./components/ToolSidebar";
-import { fetchModels, fetchTools, fetchUserSettings, saveUserSettings, streamChat, testUserSettings } from "./services/agentApi";
+import { fetchModels, fetchTools, fetchUserSettings, saveUserSettings, streamChat, testUserSettings, testYoloEnvironment } from "./services/agentApi";
 import { loadPersistedChatState, savePersistedChatState, type PersistedChatState } from "./services/chatStorage";
 import { AgentStreamEvent, ChatModelOption, ChatSession, ToolCallData, UIMessage, UserSettings } from "./types";
 
@@ -21,6 +21,7 @@ const defaultUserSettings: UserSettings = {
   remote_sftp_username: "",
   remote_sftp_private_key_path: "/home/qzq/.ssh/id_ed25519",
   remote_sftp_port: 22,
+  local_yolo_train_venv_path: "",
 };
 
 function normalizeSessionsForStorage(sessions: ChatSession[]): ChatSession[] {
@@ -58,7 +59,7 @@ function writeStorage(key: string, value: string) {
   }
 }
 
-function userSettingsKey(settings: UserSettings) {
+function remoteUserSettingsKey(settings: UserSettings) {
   return JSON.stringify({
     remote_sftp_host: settings.remote_sftp_host.trim(),
     remote_sftp_username: settings.remote_sftp_username.trim(),
@@ -76,6 +77,10 @@ function isCompleteUserSettings(settings: UserSettings) {
   );
 }
 
+function yoloEnvironmentKey(settings: UserSettings) {
+  return settings.local_yolo_train_venv_path.trim();
+}
+
 export default function App() {
   const [sessions, setSessions] = useState<ChatSession[]>(() => [newSession()]);
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => "");
@@ -90,11 +95,16 @@ export default function App() {
   const [activeProvider, setActiveProvider] = useState("openrouter");
   const [activeModel, setActiveModel] = useState("openrouter/free");
   const [userSettings, setUserSettings] = useState<UserSettings>(defaultUserSettings);
-  const [isSavingUserSettings, setIsSavingUserSettings] = useState(false);
+  const [isSavingRemoteUserSettings, setIsSavingRemoteUserSettings] = useState(false);
+  const [isSavingYoloEnvironment, setIsSavingYoloEnvironment] = useState(false);
   const [isTestingUserSettings, setIsTestingUserSettings] = useState(false);
+  const [isTestingYoloEnvironment, setIsTestingYoloEnvironment] = useState(false);
   const [userSettingsStatus, setUserSettingsStatus] = useState("");
+  const [yoloEnvironmentStatus, setYoloEnvironmentStatus] = useState("");
   const [testedUserSettingsKey, setTestedUserSettingsKey] = useState("");
-  const [savedUserSettingsKey, setSavedUserSettingsKey] = useState("");
+  const [testedYoloEnvironmentKey, setTestedYoloEnvironmentKey] = useState("");
+  const [savedRemoteUserSettingsKey, setSavedRemoteUserSettingsKey] = useState("");
+  const [savedYoloEnvironmentKey, setSavedYoloEnvironmentKey] = useState("");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeAbortControllerRef = useRef<AbortController | null>(null);
@@ -112,8 +122,11 @@ export default function App() {
     return tool.name.toLowerCase().includes(query) || tool.description.toLowerCase().includes(query);
   });
   const isUserSettingsComplete = isCompleteUserSettings(userSettings);
-  const isUserSettingsTestPassed = testedUserSettingsKey === userSettingsKey(userSettings);
-  const isUserSettingsSaved = savedUserSettingsKey === userSettingsKey(userSettings);
+  const isUserSettingsTestPassed = testedUserSettingsKey === remoteUserSettingsKey(userSettings);
+  const isYoloEnvironmentTestPassed =
+    Boolean(yoloEnvironmentKey(userSettings)) && testedYoloEnvironmentKey === yoloEnvironmentKey(userSettings);
+  const isUserSettingsSaved = savedRemoteUserSettingsKey === remoteUserSettingsKey(userSettings);
+  const isYoloEnvironmentSaved = savedYoloEnvironmentKey === yoloEnvironmentKey(userSettings);
 
   useEffect(() => {
     setCurrentSessionId((current) => {
@@ -184,8 +197,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let isMounted = true;
+
     fetchModels()
       .then((data) => {
+        if (!isMounted) return;
         setModelOptions(data.models);
         const saved = localStorage.getItem("llmSelection");
         let defaultSelection = data.default;
@@ -207,19 +223,66 @@ export default function App() {
       });
 
     fetchTools()
-      .then((data) => setTools(data.tools))
+      .then((data) => {
+        if (!isMounted) return;
+        setTools(data.tools);
+      })
       .catch((error) => {
         console.error(error);
       });
 
     fetchUserSettings()
       .then((settings) => {
+        if (!isMounted) return;
         setUserSettings(settings);
-        setSavedUserSettingsKey(userSettingsKey(settings));
+        setSavedRemoteUserSettingsKey(remoteUserSettingsKey(settings));
+        setSavedYoloEnvironmentKey(yoloEnvironmentKey(settings));
+
+        if (isCompleteUserSettings(settings)) {
+          setIsTestingUserSettings(true);
+          setUserSettingsStatus("正在自动测试 SSH/SFTP 联通...");
+          testUserSettings(settings)
+            .then((result) => {
+              if (!isMounted) return;
+              setTestedUserSettingsKey(remoteUserSettingsKey(settings));
+              setUserSettingsStatus(result.message || "联通正常");
+            })
+            .catch((error: any) => {
+              if (!isMounted) return;
+              setTestedUserSettingsKey("");
+              setUserSettingsStatus(error?.message ?? "联通测试失败");
+            })
+            .finally(() => {
+              if (isMounted) setIsTestingUserSettings(false);
+            });
+        }
+
+        if (yoloEnvironmentKey(settings)) {
+          setIsTestingYoloEnvironment(true);
+          setYoloEnvironmentStatus("正在自动测试Ultralytics YOLO CLI...");
+          testYoloEnvironment(settings)
+            .then((result) => {
+              if (!isMounted) return;
+              setTestedYoloEnvironmentKey(yoloEnvironmentKey(settings));
+              setYoloEnvironmentStatus(result.message || "Ultralytics YOLO CLI正常");
+            })
+            .catch((error: any) => {
+              if (!isMounted) return;
+              setTestedYoloEnvironmentKey("");
+              setYoloEnvironmentStatus(error?.message ?? "YOLO CLI测试失败");
+            })
+            .finally(() => {
+              if (isMounted) setIsTestingYoloEnvironment(false);
+            });
+        }
       })
       .catch((error) => {
         console.error(error);
       });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -345,10 +408,21 @@ export default function App() {
   };
 
   const handleUserSettingsChange = (nextSettings: UserSettings) => {
+    const currentRemoteUserSettingsKey = remoteUserSettingsKey(userSettings);
+    const nextRemoteUserSettingsKey = remoteUserSettingsKey(nextSettings);
+    const currentYoloEnvironmentKey = yoloEnvironmentKey(userSettings);
+    const nextYoloEnvironmentKey = yoloEnvironmentKey(nextSettings);
     setUserSettings(nextSettings);
-    setTestedUserSettingsKey("");
-    setSavedUserSettingsKey("");
-    setUserSettingsStatus("");
+    if (currentRemoteUserSettingsKey !== nextRemoteUserSettingsKey) {
+      setTestedUserSettingsKey("");
+      setSavedRemoteUserSettingsKey("");
+      setUserSettingsStatus("");
+    }
+    if (currentYoloEnvironmentKey !== nextYoloEnvironmentKey) {
+      setTestedYoloEnvironmentKey("");
+      setSavedYoloEnvironmentKey("");
+      setYoloEnvironmentStatus("");
+    }
   };
 
   const handleTestUserSettings = async () => {
@@ -363,7 +437,7 @@ export default function App() {
     setUserSettingsStatus("正在测试 SSH/SFTP 联通...");
     try {
       const result = await testUserSettings(userSettings);
-      setTestedUserSettingsKey(userSettingsKey(userSettings));
+      setTestedUserSettingsKey(remoteUserSettingsKey(userSettings));
       setUserSettingsStatus(result.message || "联通正常");
     } catch (error: any) {
       setUserSettingsStatus(error?.message ?? "联通测试失败");
@@ -372,23 +446,53 @@ export default function App() {
     }
   };
 
-  const handleSaveUserSettings = async () => {
-    if (!isCompleteUserSettings(userSettings) || testedUserSettingsKey !== userSettingsKey(userSettings)) {
-      setUserSettingsStatus("请先填写完整信息并测试联通成功");
+  const handleTestYoloEnvironment = async () => {
+    const envKey = yoloEnvironmentKey(userSettings);
+    if (!envKey) {
+      setTestedYoloEnvironmentKey("");
+      setYoloEnvironmentStatus("请先填写YOLO训练虚拟环境路径");
       return;
     }
 
-    setIsSavingUserSettings(true);
+    setIsTestingYoloEnvironment(true);
+    setTestedYoloEnvironmentKey("");
+    setYoloEnvironmentStatus("正在测试Ultralytics YOLO CLI...");
+    try {
+      const result = await testYoloEnvironment(userSettings);
+      setTestedYoloEnvironmentKey(envKey);
+      setYoloEnvironmentStatus(result.message || "Ultralytics YOLO CLI正常");
+    } catch (error: any) {
+      setYoloEnvironmentStatus(error?.message ?? "YOLO CLI测试失败");
+    } finally {
+      setIsTestingYoloEnvironment(false);
+    }
+  };
+
+  const handleSaveRemoteUserSettings = async () => {
+    setIsSavingRemoteUserSettings(true);
     try {
       const savedSettings = await saveUserSettings(userSettings);
       setUserSettings(savedSettings);
-      setTestedUserSettingsKey(userSettingsKey(savedSettings));
-      setSavedUserSettingsKey(userSettingsKey(savedSettings));
+      setSavedRemoteUserSettingsKey(remoteUserSettingsKey(savedSettings));
       setUserSettingsStatus("已保存，后续远端发布会使用该配置");
     } catch (error: any) {
       setUserSettingsStatus(error?.message ?? "保存失败");
     } finally {
-      setIsSavingUserSettings(false);
+      setIsSavingRemoteUserSettings(false);
+    }
+  };
+
+  const handleSaveYoloEnvironment = async () => {
+    setIsSavingYoloEnvironment(true);
+    try {
+      const savedSettings = await saveUserSettings(userSettings);
+      setUserSettings(savedSettings);
+      setSavedYoloEnvironmentKey(yoloEnvironmentKey(savedSettings));
+      setYoloEnvironmentStatus("已保存，后续本地训练会使用该配置");
+    } catch (error: any) {
+      setYoloEnvironmentStatus(error?.message ?? "保存失败");
+    } finally {
+      setIsSavingYoloEnvironment(false);
     }
   };
 
@@ -503,14 +607,21 @@ export default function App() {
           activeModelLabel={activeModelLabel}
           userSettings={userSettings}
           isUserSettingsComplete={isUserSettingsComplete}
-          isSavingUserSettings={isSavingUserSettings}
+          isSavingRemoteUserSettings={isSavingRemoteUserSettings}
+          isSavingYoloEnvironment={isSavingYoloEnvironment}
           isTestingUserSettings={isTestingUserSettings}
+          isTestingYoloEnvironment={isTestingYoloEnvironment}
           isUserSettingsTestPassed={isUserSettingsTestPassed}
           isUserSettingsSaved={isUserSettingsSaved}
+          isYoloEnvironmentTestPassed={isYoloEnvironmentTestPassed}
+          isYoloEnvironmentSaved={isYoloEnvironmentSaved}
           userSettingsStatus={userSettingsStatus}
+          yoloEnvironmentStatus={yoloEnvironmentStatus}
           onUserSettingsChange={handleUserSettingsChange}
           onTestUserSettings={handleTestUserSettings}
-          onSaveUserSettings={handleSaveUserSettings}
+          onTestYoloEnvironment={handleTestYoloEnvironment}
+          onSaveUserSettings={handleSaveRemoteUserSettings}
+          onSaveYoloEnvironment={handleSaveYoloEnvironment}
         />
 
         <main className="relative flex min-w-0 flex-1 flex-col">

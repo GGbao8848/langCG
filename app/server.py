@@ -25,7 +25,12 @@ from app.agent.chat import (
 )
 from app.agent.streaming import message_key, message_text
 from app.services.chat_store import init_chat_store, load_chat_state, save_chat_state
-from app.services.user_settings import load_user_settings, save_user_settings, test_user_settings_connection
+from app.services.user_settings import (
+    load_user_settings,
+    save_user_settings,
+    test_user_settings_connection,
+    test_yolo_environment,
+)
 
 load_dotenv()
 
@@ -87,6 +92,7 @@ class UserSettings(BaseModel):
     remote_sftp_username: str = ""
     remote_sftp_private_key_path: str = "/home/qzq/.ssh/id_ed25519"
     remote_sftp_port: int = 22
+    local_yolo_train_venv_path: str = ""
 
 
 app = FastAPI(title="langCG Agent API")
@@ -368,6 +374,14 @@ def put_user_settings(settings: UserSettings) -> dict[str, Any]:
 def test_user_settings(settings: UserSettings) -> dict[str, Any]:
     try:
         return test_user_settings_connection(settings.model_dump(mode="json"))
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/user-settings/test-yolo-env")
+def test_user_settings_yolo_env(settings: UserSettings) -> dict[str, Any]:
+    try:
+        return test_yolo_environment(settings.model_dump(mode="json"))
     except Exception as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

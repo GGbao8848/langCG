@@ -31,6 +31,7 @@ export type UserSettings = {
   remote_sftp_username: string;
   remote_sftp_private_key_path: string;
   remote_sftp_port: number;
+  local_yolo_train_venv_path: string;
 };
 
 export type UserSettingsTestResult = {

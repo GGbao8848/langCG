@@ -1,0 +1,220 @@
+from __future__ import annotations
+
+import os
+import shlex
+import subprocess
+from pathlib import Path, PurePosixPath
+from typing import Optional
+from urllib.parse import unquote, urlparse
+
+from langchain.tools import tool
+
+from app.services.user_settings import load_user_settings
+
+
+def _is_remote_yaml_path(yaml_path: str) -> bool:
+    return urlparse(yaml_path.strip()).scheme == "sftp"
+
+def _normalize_yaml_path(yaml_path: str) -> str:
+    text = yaml_path.strip()
+    if not text:
+        raise ValueError("yaml_path不能为空")
+
+    parsed = urlparse(text)
+    if parsed.scheme == "sftp":
+        if not parsed.path:
+            raise ValueError("sftp路径缺少远端文件路径")
+        return unquote(parsed.path)
+    if parsed.scheme and parsed.scheme != "file":
+        raise ValueError("yaml_path只支持本地路径、file://路径或sftp://host/path.yaml")
+    if parsed.scheme == "file":
+        return unquote(parsed.path)
+    return os.path.expanduser(text)
+
+
+def _assert_yaml_file(path_text: str, require_exists: bool) -> None:
+    suffix = PurePosixPath(path_text).suffix.lower()
+    if suffix not in {".yaml", ".yml"}:
+        raise ValueError(f"yaml_path必须指向.yaml或.yml文件: {path_text}")
+    if require_exists and not Path(path_text).expanduser().is_file():
+        raise ValueError(f"yaml文件不存在: {path_text}")
+
+
+def _derive_train_dirs(path_text: str) -> tuple[str, str]:
+    path = PurePosixPath(path_text)
+    parts = path.parts
+    dataset_index: int | None = None
+    for index, part in enumerate(parts):
+        if part in {"dataset", "datasets"}:
+            dataset_index = index
+
+    if dataset_index is None:
+        raise ValueError("无法从yaml_path中识别dataset或datasets目录，需手动指定project_dir")
+    if dataset_index < 1:
+        raise ValueError("无法从yaml_path中识别detector name，需手动指定project_dir")
+
+    work_dir = PurePosixPath(*parts[: dataset_index - 1])
+    detector_dir = PurePosixPath(*parts[:dataset_index])
+    return str(work_dir), str(detector_dir / "runs" / "train")
+
+
+def _shell_assignment(key: str, value: str | int) -> str:
+    if isinstance(value, int):
+        return f"{key}={value}"
+    if key not in {"data", "project", "name"} and not any(char.isspace() for char in value):
+        return f"{key}={value}"
+    return f'{key}="{value}"'
+
+
+def _build_train_command(
+    data_path: str,
+    project_dir: str,
+    name: str,
+    command_prefix: str,
+    model: str,
+    epochs: int,
+    imgsz: int,
+    batch: int,
+    workers: int,
+    cache: str,
+) -> list[str]:
+    return [
+        *shlex.split(command_prefix),
+        "detect",
+        "train",
+        _shell_assignment("data", data_path),
+        _shell_assignment("model", model),
+        _shell_assignment("epochs", epochs),
+        _shell_assignment("imgsz", imgsz),
+        _shell_assignment("batch", batch),
+        _shell_assignment("workers", workers),
+        _shell_assignment("cache", cache),
+        _shell_assignment("project", project_dir),
+        _shell_assignment("name", name),
+    ]
+
+
+def _resolve_local_yolo_executable(venv_path: str) -> Path:
+    path = Path(venv_path).expanduser()
+    if not str(path).strip():
+        raise ValueError("本地训练需要先在前端环境变量中配置local_yolo_train_venv_path，或调用工具时传入local_venv_path")
+
+    if path.name == "yolo" and path.is_file():
+        return path
+
+    yolo_path = path / "bin" / "yolo"
+    if not yolo_path.is_file():
+        raise ValueError(f"本地YOLO训练虚拟环境无效，未找到: {yolo_path}")
+    return yolo_path
+
+
+@tool
+def launch_yolo_training(
+    yaml_path: str,
+    model: str = "yolo11m.pt",
+    epochs: int = 200,
+    imgsz: int = 800,
+    batch: Optional[int] = None,
+    workers: int = 4,
+    cache: str = "disk",
+    project_dir: Optional[str] = None,
+    name: Optional[str] = None,
+    command_prefix: str = "subyolo",
+    execute: bool = False,
+    require_exists: bool = False,
+    local_venv_path: Optional[str] = None,
+) -> str:
+    """生成或启动YOLO训练命令，支持本地yaml路径和sftp://host/path.yaml路径。
+
+    Args:
+        yaml_path: 数据集yaml路径，可为本地路径、file://路径或sftp://host/path.yaml。
+        model: 模型权重，默认yolo11m.pt；常用值包括yolo11n/s/m/l/x.pt和yolov8n/s/m/l/x.pt，也允许其他Ultralytics支持的权重路径或名称。
+        epochs: 训练轮数，默认200。
+        imgsz: 图像尺寸，默认800。
+        batch: batch大小；远程训练默认24，本地训练默认8。
+        workers: dataloader workers，默认4。
+        cache: cache参数，默认disk。
+        project_dir: 训练输出目录；默认使用<detector目录>/runs/train。命令会先cd到detector name前的目录。
+        name: 训练任务名称；默认使用yaml文件名stem。
+        command_prefix: 训练命令前缀，默认subyolo。
+        execute: 是否真正启动训练；默认False，只返回cd目录和命令。
+        require_exists: 是否要求yaml文件在当前机器存在；远端sftp路径默认不强制检查。
+        local_venv_path: 本地YOLO训练虚拟环境目录或python路径；默认读取前端保存的local_yolo_train_venv_path。
+    """
+    is_remote = _is_remote_yaml_path(yaml_path)
+    data_path = _normalize_yaml_path(yaml_path)
+    _assert_yaml_file(data_path, require_exists=require_exists or not is_remote)
+    if not model.strip():
+        raise ValueError("model不能为空")
+
+    resolved_work_dir, default_project_dir = _derive_train_dirs(data_path)
+    resolved_project_dir = project_dir or default_project_dir
+    resolved_name = name or PurePosixPath(data_path).stem
+    resolved_batch = batch if batch is not None else (24 if is_remote else 8)
+
+    user_settings = load_user_settings()
+    resolved_local_venv_path = (
+        (local_venv_path or "").strip()
+        or str(user_settings.get("local_yolo_train_venv_path") or "").strip()
+    )
+    local_yolo_path: Path | None = None
+    if not is_remote:
+        local_yolo_path = _resolve_local_yolo_executable(resolved_local_venv_path)
+
+    resolved_command_prefix = command_prefix.strip() if is_remote else str(local_yolo_path)
+    if not resolved_command_prefix:
+        raise ValueError("command_prefix不能为空")
+    if epochs <= 0 or imgsz <= 0 or resolved_batch <= 0 or workers < 0:
+        raise ValueError("epochs/imgsz/batch必须为正数，workers不能为负数")
+    if not cache.strip():
+        raise ValueError("cache不能为空")
+
+    command_parts = _build_train_command(
+        data_path=data_path,
+        project_dir=resolved_project_dir,
+        name=resolved_name,
+        command_prefix=resolved_command_prefix,
+        model=model,
+        epochs=epochs,
+        imgsz=imgsz,
+        batch=resolved_batch,
+        workers=workers,
+        cache=cache,
+    )
+    command = " ".join(command_parts)
+    cd_command = f'cd "{resolved_work_dir}" && {command}'
+
+    if not execute:
+        return (
+            "已生成训练启动命令，默认未执行。\n"
+            f"mode={'remote_script' if is_remote else 'local_venv'}\n"
+            f"data={data_path}\n"
+            f"work_dir={resolved_work_dir}\n"
+            f"project={resolved_project_dir}\n"
+            f"name={resolved_name}\n"
+            f"batch={resolved_batch}\n"
+            f"local_venv_path={resolved_local_venv_path if not is_remote else ''}\n"
+            f"command={cd_command}"
+        )
+
+    Path(resolved_project_dir).expanduser().mkdir(parents=True, exist_ok=True)
+    log_path = Path(resolved_project_dir).expanduser() / f"{resolved_name}.log"
+    with log_path.open("ab") as log_file:
+        process = subprocess.Popen(
+            command,
+            cwd=Path(resolved_work_dir).expanduser(),
+            shell=True,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+    return (
+        "已启动训练，后台进程已创建，工具执行成功。\n"
+        f"mode={'remote_script' if is_remote else 'local_venv'}\n"
+        f"pid={process.pid}\n"
+        f"cwd={resolved_work_dir}\n"
+        f"project={resolved_project_dir}\n"
+        f"log={log_path}\n"
+        f"command={command}"
+    )

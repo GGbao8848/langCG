@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ DEFAULT_USER_SETTINGS: dict[str, Any] = {
     "remote_sftp_username": "",
     "remote_sftp_private_key_path": "/home/qzq/.ssh/id_ed25519",
     "remote_sftp_port": 22,
+    "local_yolo_train_venv_path": "",
 }
 
 
@@ -31,6 +33,7 @@ def _normalize_user_settings(payload: dict[str, Any]) -> dict[str, Any]:
         "remote_sftp_username": str(settings.get("remote_sftp_username") or "").strip(),
         "remote_sftp_private_key_path": str(settings.get("remote_sftp_private_key_path") or "").strip(),
         "remote_sftp_port": port,
+        "local_yolo_train_venv_path": str(settings.get("local_yolo_train_venv_path") or "").strip(),
     }
 
 
@@ -42,6 +45,53 @@ def save_user_settings(settings: dict[str, Any]) -> dict[str, Any]:
     normalized = _normalize_user_settings(settings)
     save_app_state_value(USER_SETTINGS_KEY, normalized)
     return normalized
+
+
+def _resolve_yolo_executable(venv_path: str) -> Path:
+    path = Path(venv_path).expanduser()
+    if not str(path).strip():
+        raise ValueError("local_yolo_train_venv_path不能为空")
+
+    if path.name == "yolo" and path.is_file():
+        return path
+
+    yolo_path = path / "bin" / "yolo"
+    if not yolo_path.is_file():
+        raise ValueError(f"未找到YOLO CLI: {yolo_path}")
+    return yolo_path
+
+
+def test_yolo_environment(settings: dict[str, Any]) -> dict[str, Any]:
+    normalized = _normalize_user_settings(settings)
+    yolo_path = _resolve_yolo_executable(normalized["local_yolo_train_venv_path"])
+    started_at = time.perf_counter()
+    try:
+        result = subprocess.run(
+            [str(yolo_path), "help"],
+            cwd=str(yolo_path.parent),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("Ultralytics YOLO CLI测试超时") from exc
+    except OSError as exc:
+        raise ValueError(f"无法运行YOLO CLI: {exc}") from exc
+
+    output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+    if result.returncode != 0:
+        raise ValueError(f"Ultralytics YOLO CLI测试失败: {output[:500] or f'exit {result.returncode}'}")
+    if "Ultralytics" not in output and "YOLO" not in output:
+        raise ValueError(f"命令可运行，但输出不像Ultralytics YOLO CLI: {output[:500]}")
+
+    latency_ms = round((time.perf_counter() - started_at) * 1000)
+    return {
+        "ok": True,
+        "message": f"Ultralytics YOLO CLI正常，响应 {latency_ms} ms",
+        "latency_ms": latency_ms,
+        "yolo_path": str(yolo_path),
+    }
 
 
 def test_user_settings_connection(settings: dict[str, Any]) -> dict[str, Any]:
