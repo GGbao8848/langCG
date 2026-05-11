@@ -3,9 +3,9 @@ import React, { useEffect, useRef, useState } from "react";
 import { ChatMessage } from "./components/ChatMessage";
 import { ChatSidebar } from "./components/ChatSidebar";
 import { ToolSidebar } from "./components/ToolSidebar";
-import { fetchModels, fetchTools, streamChat } from "./services/agentApi";
+import { fetchModels, fetchTools, fetchUserSettings, saveUserSettings, streamChat, testUserSettings } from "./services/agentApi";
 import { loadPersistedChatState, savePersistedChatState, type PersistedChatState } from "./services/chatStorage";
-import { AgentStreamEvent, ChatModelOption, ChatSession, ToolCallData, UIMessage } from "./types";
+import { AgentStreamEvent, ChatModelOption, ChatSession, ToolCallData, UIMessage, UserSettings } from "./types";
 
 const newSession = (): ChatSession => ({
   id: crypto.randomUUID(),
@@ -15,6 +15,13 @@ const newSession = (): ChatSession => ({
 });
 
 const selectionKey = (provider: string, model: string) => `${provider}::${model}`;
+
+const defaultUserSettings: UserSettings = {
+  remote_sftp_host: "172.31.1.42",
+  remote_sftp_username: "",
+  remote_sftp_private_key_path: "/home/qzq/.ssh/id_ed25519",
+  remote_sftp_port: 22,
+};
 
 function normalizeSessionsForStorage(sessions: ChatSession[]): ChatSession[] {
   const normalized = sessions
@@ -51,6 +58,24 @@ function writeStorage(key: string, value: string) {
   }
 }
 
+function userSettingsKey(settings: UserSettings) {
+  return JSON.stringify({
+    remote_sftp_host: settings.remote_sftp_host.trim(),
+    remote_sftp_username: settings.remote_sftp_username.trim(),
+    remote_sftp_private_key_path: settings.remote_sftp_private_key_path.trim(),
+    remote_sftp_port: Number(settings.remote_sftp_port || 0),
+  });
+}
+
+function isCompleteUserSettings(settings: UserSettings) {
+  return Boolean(
+    settings.remote_sftp_host.trim() &&
+      settings.remote_sftp_username.trim() &&
+      settings.remote_sftp_private_key_path.trim() &&
+      Number(settings.remote_sftp_port) > 0,
+  );
+}
+
 export default function App() {
   const [sessions, setSessions] = useState<ChatSession[]>(() => [newSession()]);
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => "");
@@ -64,6 +89,12 @@ export default function App() {
   const [modelOptions, setModelOptions] = useState<ChatModelOption[]>([]);
   const [activeProvider, setActiveProvider] = useState("openrouter");
   const [activeModel, setActiveModel] = useState("openrouter/free");
+  const [userSettings, setUserSettings] = useState<UserSettings>(defaultUserSettings);
+  const [isSavingUserSettings, setIsSavingUserSettings] = useState(false);
+  const [isTestingUserSettings, setIsTestingUserSettings] = useState(false);
+  const [userSettingsStatus, setUserSettingsStatus] = useState("");
+  const [testedUserSettingsKey, setTestedUserSettingsKey] = useState("");
+  const [savedUserSettingsKey, setSavedUserSettingsKey] = useState("");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeAbortControllerRef = useRef<AbortController | null>(null);
@@ -80,6 +111,9 @@ export default function App() {
     const query = toolSearchQuery.toLowerCase();
     return tool.name.toLowerCase().includes(query) || tool.description.toLowerCase().includes(query);
   });
+  const isUserSettingsComplete = isCompleteUserSettings(userSettings);
+  const isUserSettingsTestPassed = testedUserSettingsKey === userSettingsKey(userSettings);
+  const isUserSettingsSaved = savedUserSettingsKey === userSettingsKey(userSettings);
 
   useEffect(() => {
     setCurrentSessionId((current) => {
@@ -174,6 +208,15 @@ export default function App() {
 
     fetchTools()
       .then((data) => setTools(data.tools))
+      .catch((error) => {
+        console.error(error);
+      });
+
+    fetchUserSettings()
+      .then((settings) => {
+        setUserSettings(settings);
+        setSavedUserSettingsKey(userSettingsKey(settings));
+      })
       .catch((error) => {
         console.error(error);
       });
@@ -301,6 +344,54 @@ export default function App() {
     writeStorage("llmSelection", JSON.stringify({ provider, model }));
   };
 
+  const handleUserSettingsChange = (nextSettings: UserSettings) => {
+    setUserSettings(nextSettings);
+    setTestedUserSettingsKey("");
+    setSavedUserSettingsKey("");
+    setUserSettingsStatus("");
+  };
+
+  const handleTestUserSettings = async () => {
+    if (!isCompleteUserSettings(userSettings)) {
+      setTestedUserSettingsKey("");
+      setUserSettingsStatus("请先填写完整 Host、Username、Private key、Port");
+      return;
+    }
+
+    setIsTestingUserSettings(true);
+    setTestedUserSettingsKey("");
+    setUserSettingsStatus("正在测试 SSH/SFTP 联通...");
+    try {
+      const result = await testUserSettings(userSettings);
+      setTestedUserSettingsKey(userSettingsKey(userSettings));
+      setUserSettingsStatus(result.message || "联通正常");
+    } catch (error: any) {
+      setUserSettingsStatus(error?.message ?? "联通测试失败");
+    } finally {
+      setIsTestingUserSettings(false);
+    }
+  };
+
+  const handleSaveUserSettings = async () => {
+    if (!isCompleteUserSettings(userSettings) || testedUserSettingsKey !== userSettingsKey(userSettings)) {
+      setUserSettingsStatus("请先填写完整信息并测试联通成功");
+      return;
+    }
+
+    setIsSavingUserSettings(true);
+    try {
+      const savedSettings = await saveUserSettings(userSettings);
+      setUserSettings(savedSettings);
+      setTestedUserSettingsKey(userSettingsKey(savedSettings));
+      setSavedUserSettingsKey(userSettingsKey(savedSettings));
+      setUserSettingsStatus("已保存，后续远端发布会使用该配置");
+    } catch (error: any) {
+      setUserSettingsStatus(error?.message ?? "保存失败");
+    } finally {
+      setIsSavingUserSettings(false);
+    }
+  };
+
   const handleSend = async (event?: React.FormEvent) => {
     event?.preventDefault();
     if (isLoading) {
@@ -410,6 +501,16 @@ export default function App() {
           onDeleteSession={deleteSession}
           onRenameSession={renameSession}
           activeModelLabel={activeModelLabel}
+          userSettings={userSettings}
+          isUserSettingsComplete={isUserSettingsComplete}
+          isSavingUserSettings={isSavingUserSettings}
+          isTestingUserSettings={isTestingUserSettings}
+          isUserSettingsTestPassed={isUserSettingsTestPassed}
+          isUserSettingsSaved={isUserSettingsSaved}
+          userSettingsStatus={userSettingsStatus}
+          onUserSettingsChange={handleUserSettingsChange}
+          onTestUserSettings={handleTestUserSettings}
+          onSaveUserSettings={handleSaveUserSettings}
         />
 
         <main className="relative flex min-w-0 flex-1 flex-col">

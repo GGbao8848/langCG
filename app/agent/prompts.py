@@ -4,6 +4,7 @@ SYSTEM_PROMPT = (
     "use the publish_yolo_dataset tool. "
     "If oldyaml is provided, treat it as incremental publish. Otherwise, require a detector_path whose last path segment is detector_name. "
     "The tool itself decides whether the publish target is local or remote based on oldyaml or detector_path. "
+    "Remote SFTP defaults such as host, username, private key path, and port come from the saved user settings in the left sidebar; do not ask the user to edit .env for these fields. "
     "When the user asks to visualize annotations, draw boxes, or render labels on images, "
     "use the annotate_visualize tool. "
     "When the user says they deleted some visualized annotation-review images and wants to remove the matching original YOLO images and labels from training, "

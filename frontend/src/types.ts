@@ -26,6 +26,19 @@ export type ChatModelOption = {
   label: string;
 };
 
+export type UserSettings = {
+  remote_sftp_host: string;
+  remote_sftp_username: string;
+  remote_sftp_private_key_path: string;
+  remote_sftp_port: number;
+};
+
+export type UserSettingsTestResult = {
+  ok: boolean;
+  message: string;
+  latency_ms?: number;
+};
+
 export type AgentStreamEvent =
   | { type: "metadata"; provider: string; model: string }
   | { type: "token"; text: string }

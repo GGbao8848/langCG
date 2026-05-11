@@ -151,3 +151,32 @@ def save_chat_state(state: dict[str, Any]) -> None:
             (str(state.get("currentSessionId") or ""),),
         )
         connection.commit()
+
+
+def load_app_state_value(key: str) -> dict[str, Any]:
+    init_chat_store()
+
+    with _connect() as connection:
+        row = connection.execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return {}
+
+    try:
+        value = json.loads(row["value"])
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def save_app_state_value(key: str, value: dict[str, Any]) -> None:
+    init_chat_store()
+
+    with _connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO app_state (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, json.dumps(value, ensure_ascii=False)),
+        )

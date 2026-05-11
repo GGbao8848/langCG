@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 import shutil
 from pathlib import Path, PurePosixPath
@@ -15,6 +14,7 @@ from app.services.publish import (
     run_remote_unzip_service,
     run_zip_folder_service,
 )
+from app.services.user_settings import load_user_settings
 
 _DEFAULT_SPLITS = ["train", "val", "test"]
 
@@ -116,6 +116,27 @@ def _infer_context_from_detector_path(detector_path: str) -> dict[str, str | int
         "detector_name": detector_name,
         "dataset_bucket": "datasets",
     }
+
+
+def _apply_remote_defaults(
+    context: dict[str, str | int | None],
+    remote_value: str | None,
+    configured_host: str | None,
+    configured_port: int | None,
+) -> dict[str, str | int | None]:
+    if not remote_value or not configured_host:
+        return context
+    value_path = Path(remote_value).expanduser()
+    if _is_remote_text(remote_value) or value_path.exists() or not value_path.is_absolute():
+        return context
+
+    next_context = dict(context)
+    next_context["is_remote"] = True
+    next_context["remote_host"] = next_context.get("remote_host") or configured_host
+    next_context["remote_port"] = next_context.get("remote_port") or configured_port or 22
+    if "remote_project_root_dir" not in next_context:
+        next_context["remote_project_root_dir"] = next_context.pop("project_root_dir", None)
+    return next_context
 
 
 def _default_dataset_version(detector_name: str) -> str:
@@ -349,31 +370,46 @@ def publish_yolo_dataset(
     if not oldyaml and not detector_path:
         raise ValueError("必须提供oldyaml或detector_path中的一个")
 
-    total_stages = 7 if (oldyaml and _is_remote_text(oldyaml)) or (detector_path and _is_remote_text(detector_path)) else 4
-    _report_stage(1, total_stages, "收集输入数据集与发布上下文")
-
     input_paths = _normalize_input_dirs(input_dir, input_dirs)
     class_names = _collect_classes(input_paths)
 
-    env_username = os.getenv("REMOTE_SFTP_USERNAME")
-    env_key = os.getenv("REMOTE_SFTP_PRIVATE_KEY_PATH")
-    env_port = os.getenv("REMOTE_SFTP_PORT")
-    remote_username = (remote_username or "").strip() or env_username or None
-    remote_private_key_path = (remote_private_key_path or "").strip() or env_key or None
-    resolved_remote_port = remote_port or (int(env_port) if env_port else 22)
+    user_settings = load_user_settings()
+    configured_host = str(user_settings.get("remote_sftp_host") or "").strip() or None
+    configured_username = str(user_settings.get("remote_sftp_username") or "").strip() or None
+    configured_key = str(user_settings.get("remote_sftp_private_key_path") or "").strip() or None
+    configured_port = int(user_settings.get("remote_sftp_port") or 22)
+    remote_username = (remote_username or "").strip() or configured_username or None
+    remote_private_key_path = (remote_private_key_path or "").strip() or configured_key or None
+    resolved_remote_port = remote_port or configured_port or 22
 
     if oldyaml:
-        _report_stage(2, total_stages, "加载oldyaml并提取历史发布信息")
-        context = _infer_context_from_oldyaml(oldyaml)
-        last_yaml_text, last_yaml_source = _load_last_yaml_text(
+        context = _apply_remote_defaults(
+            _infer_context_from_oldyaml(oldyaml),
             oldyaml,
+            configured_host,
+            resolved_remote_port,
+        )
+        total_stages = 7 if context.get("is_remote") else 4
+        _report_stage(1, total_stages, "收集输入数据集与发布上下文")
+        _report_stage(2, total_stages, "加载oldyaml并提取历史发布信息")
+        last_yaml_text, last_yaml_source = _load_last_yaml_text(
+            _remote_yaml_path(configured_host, resolved_remote_port, PurePosixPath(oldyaml), remote_username)
+            if context.get("is_remote") and configured_host and not _is_remote_text(oldyaml)
+            else oldyaml,
             username=remote_username or _extract_remote_username(oldyaml),
             private_key_path=remote_private_key_path,
             port=resolved_remote_port,
         )
     else:
+        context = _apply_remote_defaults(
+            _infer_context_from_detector_path(detector_path or ""),
+            detector_path,
+            configured_host,
+            resolved_remote_port,
+        )
+        total_stages = 7 if context.get("is_remote") else 4
+        _report_stage(1, total_stages, "收集输入数据集与发布上下文")
         _report_stage(2, total_stages, "根据detector_path推断发布目标")
-        context = _infer_context_from_detector_path(detector_path or "")
         last_yaml_text = None
         last_yaml_source = None
 

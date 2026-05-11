@@ -1,4 +1,4 @@
-import { AgentStreamEvent, ChatModelOption, UIMessage } from "../types";
+import { AgentStreamEvent, ChatModelOption, UIMessage, UserSettings, UserSettingsTestResult } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -28,6 +28,24 @@ export async function fetchModels(): Promise<{
 
 export async function fetchTools(): Promise<{ tools: any[] }> {
   return requestJson("/api/tools");
+}
+
+export async function fetchUserSettings(): Promise<UserSettings> {
+  return requestJson("/api/user-settings");
+}
+
+export async function saveUserSettings(settings: UserSettings): Promise<UserSettings> {
+  return requestJson("/api/user-settings", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
+}
+
+export async function testUserSettings(settings: UserSettings): Promise<UserSettingsTestResult> {
+  return requestJson("/api/user-settings/test", {
+    method: "POST",
+    body: JSON.stringify(settings),
+  });
 }
 
 export async function streamChat(
