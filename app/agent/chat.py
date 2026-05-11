@@ -24,6 +24,7 @@ from app.tools.yolo_reindex_tool import reindex_yolo_labels
 from app.tools.xml_to_yolo_tool import convert_xml_to_yolo
 from app.tools.dataset_clean_tool import clean_irregular_dataset
 from app.tools.filesystem_toolkit import get_filesystem_tools
+from app.tools.prune_yolo_by_visualized_tool import prune_yolo_by_visualized
 from app.tools.yolo_sliding_window_tool import yolo_sliding_window_crop
 
 
@@ -65,6 +66,7 @@ RAW_TOOLS = {
     convert_xml_to_yolo.name: convert_xml_to_yolo,
     reindex_yolo_labels.name: reindex_yolo_labels,
     split_yolo_dataset.name: split_yolo_dataset,
+    prune_yolo_by_visualized.name: prune_yolo_by_visualized,
     yolo_sliding_window_crop.name: yolo_sliding_window_crop,
 }
 

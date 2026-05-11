@@ -426,7 +426,7 @@ export default function App() {
               aria-label="选择 LLM 模型"
               value={selectionKey(activeProvider, activeModel)}
               onChange={(event) => handleModelChange(event.target.value)}
-              className="min-w-0 max-w-[52vw] cursor-pointer appearance-none truncate rounded-xl border border-slate-200 bg-white/90 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm backdrop-blur-md transition-colors hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 sm:max-w-none"
+              className="w-auto min-w-0 max-w-[52vw] cursor-pointer appearance-none truncate rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-center text-sm font-medium text-slate-700 shadow-sm backdrop-blur-md transition-colors hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 sm:max-w-[16rem]"
             >
               {modelOptions.map((option) => (
                 <option key={selectionKey(option.provider, option.model)} value={selectionKey(option.provider, option.model)}>
