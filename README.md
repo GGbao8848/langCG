@@ -25,6 +25,8 @@ detector_name/
 
 示例：
 
+<img src="docs/images/louyou-zhouxiang-structure.png" alt="目录结构示例" width="250">
+
 ```text
 /media/qzq/16T/TVDS/louyou_zhouxiang/
   datasets/louyou_zhouxiang_20260512_1511/louyou_zhouxiang_20260512_1511.yaml
