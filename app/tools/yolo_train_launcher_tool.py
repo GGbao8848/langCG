@@ -77,8 +77,9 @@ def _build_train_command(
     batch: int,
     workers: int,
     cache: str,
+    device: str | int | None,
 ) -> list[str]:
-    return [
+    command = [
         *shlex.split(command_prefix),
         "detect",
         "train",
@@ -92,6 +93,9 @@ def _build_train_command(
         _shell_assignment("project", project_dir),
         _shell_assignment("name", name),
     ]
+    if device is not None and str(device).strip():
+        command.append(_shell_assignment("device", str(device).strip()))
+    return command
 
 
 def _resolve_local_yolo_executable(venv_path: str) -> Path:
@@ -108,6 +112,48 @@ def _resolve_local_yolo_executable(venv_path: str) -> Path:
     return yolo_path
 
 
+def _local_python_for_yolo(yolo_path: Path) -> Path | None:
+    bin_dir = yolo_path.parent
+    python_path = bin_dir / "python"
+    if python_path.is_file():
+        return python_path
+    python3_path = bin_dir / "python3"
+    if python3_path.is_file():
+        return python3_path
+    return None
+
+
+def _detect_local_device(yolo_path: Path) -> str:
+    python_path = _local_python_for_yolo(yolo_path)
+    if python_path is None:
+        return "cpu"
+
+    probe_code = (
+        "import torch\n"
+        "device='cpu'\n"
+        "if torch.cuda.is_available():\n"
+        "    device='0'\n"
+        "elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():\n"
+        "    device='mps'\n"
+        "print(device)\n"
+    )
+    try:
+        result = subprocess.run(
+            [str(python_path), "-c", probe_code],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "cpu"
+
+    if result.returncode != 0:
+        return "cpu"
+    detected = result.stdout.strip().splitlines()[-1:] or ["cpu"]
+    return detected[0] if detected[0] in {"0", "mps", "cpu"} else "cpu"
+
+
 @tool
 def launch_yolo_training(
     yaml_path: str,
@@ -117,6 +163,7 @@ def launch_yolo_training(
     batch: Optional[int] = None,
     workers: int = 4,
     cache: str = "disk",
+    device: Optional[str] = None,
     project_dir: Optional[str] = None,
     name: Optional[str] = None,
     command_prefix: str = "subyolo",
@@ -134,6 +181,7 @@ def launch_yolo_training(
         batch: batch大小；远程训练默认24，本地训练默认8。
         workers: dataloader workers，默认4。
         cache: cache参数，默认disk。
+        device: 训练设备；远程默认不指定，本地默认自适应检测为0、mps或cpu。需要固定设备时可传0、cpu、mps、-1等。
         project_dir: 训练输出目录；默认使用<detector目录>/runs/train。命令会先cd到detector name前的目录。
         name: 训练任务名称；默认使用yaml文件名stem。
         command_prefix: 训练命令前缀，默认subyolo。
@@ -151,6 +199,7 @@ def launch_yolo_training(
     resolved_project_dir = project_dir or default_project_dir
     resolved_name = name or PurePosixPath(data_path).stem
     resolved_batch = batch if batch is not None else (24 if is_remote else 8)
+    resolved_device = device
 
     user_settings = load_user_settings()
     resolved_local_venv_path = (
@@ -160,6 +209,8 @@ def launch_yolo_training(
     local_yolo_path: Path | None = None
     if not is_remote:
         local_yolo_path = _resolve_local_yolo_executable(resolved_local_venv_path)
+        if resolved_device is None:
+            resolved_device = _detect_local_device(local_yolo_path)
 
     resolved_command_prefix = command_prefix.strip() if is_remote else str(local_yolo_path)
     if not resolved_command_prefix:
@@ -180,6 +231,7 @@ def launch_yolo_training(
         batch=resolved_batch,
         workers=workers,
         cache=cache,
+        device=resolved_device,
     )
     command = " ".join(command_parts)
     cd_command = f'cd "{resolved_work_dir}" && {command}'
@@ -193,6 +245,7 @@ def launch_yolo_training(
             f"project={resolved_project_dir}\n"
             f"name={resolved_name}\n"
             f"batch={resolved_batch}\n"
+            f"device={resolved_device or ''}\n"
             f"local_venv_path={resolved_local_venv_path if not is_remote else ''}\n"
             f"command={cd_command}"
         )
@@ -215,6 +268,7 @@ def launch_yolo_training(
         f"pid={process.pid}\n"
         f"cwd={resolved_work_dir}\n"
         f"project={resolved_project_dir}\n"
+        f"device={resolved_device or ''}\n"
         f"log={log_path}\n"
         f"command={command}"
     )

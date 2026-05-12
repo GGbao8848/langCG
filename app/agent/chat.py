@@ -28,6 +28,7 @@ from app.tools.xml_to_yolo_tool import convert_xml_to_yolo
 from app.tools.dataset_clean_tool import clean_irregular_dataset
 from app.tools.filesystem_toolkit import get_filesystem_tools
 from app.tools.prune_yolo_by_visualized_tool import prune_yolo_by_visualized
+from app.tools.collect_wubao_images_tool import collect_wubao_images
 from app.tools.yolo_sliding_window_tool import yolo_sliding_window_crop
 from app.tools.yolo_export_tool import export_yolo_torchscript
 from app.tools.yolo_train_launcher_tool import launch_yolo_training
@@ -101,6 +102,7 @@ RAW_TOOLS = {
     reindex_yolo_labels.name: reindex_yolo_labels,
     split_yolo_dataset.name: split_yolo_dataset,
     prune_yolo_by_visualized.name: prune_yolo_by_visualized,
+    collect_wubao_images.name: collect_wubao_images,
     yolo_sliding_window_crop.name: yolo_sliding_window_crop,
     export_yolo_torchscript.name: export_yolo_torchscript,
     launch_yolo_training.name: launch_yolo_training,

@@ -15,6 +15,7 @@ from app.services.publish import (
     run_zip_folder_service,
 )
 from app.services.user_settings import load_user_settings
+from app.tools.dataset_clean_tool import IMAGE_SUFFIXES
 
 _DEFAULT_SPLITS = ["train", "val", "test"]
 
@@ -145,7 +146,7 @@ def _default_dataset_version(detector_name: str) -> str:
     return f"{detector_name}_{datetime.now().strftime('%Y%m%d_%H%M')}"
 
 
-def _normalize_input_dirs(input_dir: str, input_dirs: list[str] | None) -> list[Path]:
+def _normalize_input_dirs(input_dir: str, input_dirs: list[str] | None, allow_empty: bool = False) -> list[Path]:
     raw = [input_dir, *((input_dirs or []))]
     paths: list[Path] = []
     seen: set[Path] = set()
@@ -173,9 +174,87 @@ def _normalize_input_dirs(input_dir: str, input_dirs: list[str] | None) -> list[
             if aug_candidate.is_dir() and aug_candidate not in seen:
                 paths.append(aug_candidate)
 
-    if not paths:
+    if not paths and not allow_empty:
         raise ValueError("input_dir或input_dirs至少要提供一个数据集路径")
     return paths
+
+
+def _normalize_background_dirs(background_dir: str | None, background_dirs: list[str] | None) -> list[Path]:
+    raw = [background_dir or "", *((background_dirs or []))]
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for item in raw:
+        text = (item or "").strip()
+        if not text:
+            continue
+        path = Path(text).expanduser().resolve()
+        if not path.is_dir():
+            raise ValueError(f"background目录不存在: {path}")
+        if path in seen:
+            continue
+        seen.add(path)
+        paths.append(path)
+    return paths
+
+
+def _background_target_rel(background_root: Path, image_path: Path) -> Path:
+    rel_path = image_path.relative_to(background_root)
+    flattened = "__".join(rel_path.parts)
+    return Path(f"{background_root.name}__{flattened}")
+
+
+def _dedupe_rel_path(base_dir: Path, rel_path: Path) -> Path:
+    target = base_dir / rel_path
+    if not target.exists():
+        return rel_path
+
+    stem = rel_path.stem
+    suffix = rel_path.suffix
+    parent = rel_path.parent
+    counter = 2
+    while target.exists():
+        candidate = parent / f"{stem}__{counter}{suffix}"
+        target = base_dir / candidate
+        counter += 1
+    return candidate
+
+
+def _add_backgrounds_to_train(
+    staging_dataset_dir: Path,
+    background_paths: list[Path],
+) -> tuple[int, Path | None, list[Path]]:
+    if not background_paths:
+        return 0, None, []
+
+    background_images_dir = staging_dataset_dir / "background" / "images"
+    background_labels_dir = staging_dataset_dir / "background" / "labels"
+    background_images_dir.mkdir(parents=True, exist_ok=True)
+    background_labels_dir.mkdir(parents=True, exist_ok=True)
+
+    copied = 0
+    empty_labels: list[Path] = []
+    for background_root in background_paths:
+        image_paths = [
+            path
+            for path in sorted(background_root.rglob("*"))
+            if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
+        ]
+        if not image_paths:
+            raise ValueError(f"background目录下未找到图像: {background_root}")
+
+        for image_path in image_paths:
+            rel_path = _background_target_rel(background_root, image_path)
+            rel_path = _dedupe_rel_path(background_images_dir, rel_path)
+            target_image = background_images_dir / rel_path
+            target_label = (background_labels_dir / rel_path).with_suffix(".txt")
+            target_image.parent.mkdir(parents=True, exist_ok=True)
+            target_label.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(image_path, target_image)
+            target_label.write_text("", encoding="utf-8")
+            empty_labels.append(target_label)
+            copied += 1
+
+    return copied, background_images_dir.resolve(), empty_labels
 
 
 def _read_classes_optional(dataset_root: Path) -> list[str]:
@@ -315,6 +394,9 @@ def _stage_merged_dataset(
 
     dataset_dir.mkdir(parents=True, exist_ok=False)
     split_dirs: dict[str, list[Path]] = {}
+    if not input_dirs:
+        return dataset_dir, split_dirs
+
     flatten_single = len(input_dirs) == 1
     used_names: set[str] = set()
 
@@ -354,8 +436,10 @@ def _remote_yaml_path(host: str, port: int, remote_yaml: PurePosixPath, username
 
 @tool
 def publish_yolo_dataset(
-    input_dir: str,
+    input_dir: str = "",
     input_dirs: list[str] | None = None,
+    background_dir: str | None = None,
+    background_dirs: list[str] | None = None,
     oldyaml: str | None = None,
     detector_path: str | None = None,
     dataset_version: str | None = None,
@@ -364,13 +448,36 @@ def publish_yolo_dataset(
     remote_password: str | None = None,
     remote_port: int | None = None,
 ) -> str:
-    """发布 YOLO 数据集。提供 oldyaml 表示增量发布，否则必须提供 detector_path。"""
+    """发布 YOLO 数据集。提供 oldyaml 表示增量发布，否则必须提供 detector_path。
+
+    Args:
+        input_dir: 输入数据集目录。若只追加background，可传空字符串，但必须提供oldyaml。
+        input_dirs: 可选的额外输入数据集目录。
+        background_dir: 可选的background图像目录，发布时自动加入background/images并创建空labels，yaml中仍作为train数据源。
+        background_dirs: 可选的额外background图像目录。
+        oldyaml: 旧版yaml路径或sftp路径；提供时表示增量发布。
+        detector_path: detector目录路径；未提供oldyaml时必填。
+        dataset_version: 可选的新数据集版本名。
+        remote_username: 远程用户名；默认读取左侧保存配置。
+        remote_private_key_path: 远程私钥路径；默认读取左侧保存配置。
+        remote_password: 远程密码。
+        remote_port: 远程端口；默认读取左侧保存配置。
+    """
     oldyaml = (oldyaml or "").strip() or None
     detector_path = (detector_path or "").strip() or None
     if not oldyaml and not detector_path:
         raise ValueError("必须提供oldyaml或detector_path中的一个")
 
-    input_paths = _normalize_input_dirs(input_dir, input_dirs)
+    background_paths = _normalize_background_dirs(background_dir, background_dirs)
+    input_paths = _normalize_input_dirs(
+        input_dir,
+        input_dirs,
+        allow_empty=bool(background_paths and oldyaml),
+    )
+    if not input_paths and not background_paths:
+        raise ValueError("input_dir/input_dirs和background_dir/background_dirs不能同时为空")
+    if not input_paths and background_paths and not oldyaml:
+        raise ValueError("仅追加background时必须提供oldyaml，以继承names和历史train/val路径")
     class_names = _collect_classes(input_paths)
 
     user_settings = load_user_settings()
@@ -434,6 +541,14 @@ def publish_yolo_dataset(
         detector_name,
         final_dataset_version,
     )
+    background_count, background_images_dir, _background_labels = _add_backgrounds_to_train(
+        staging_dataset_dir,
+        background_paths,
+    )
+    if background_count and background_images_dir is not None:
+        current_train_dirs = staging_split_dirs.setdefault("train", [])
+        if background_images_dir not in current_train_dirs:
+            current_train_dirs.append(background_images_dir)
 
     (staging_dataset_dir / "classes.txt").write_text(
         "".join(f"{name}\n" for name in class_names),
@@ -460,6 +575,7 @@ def publish_yolo_dataset(
         return (
             f"完成。mode=local，detector_name={detector_name}，dataset_version={final_dataset_version}，"
             f"published_dataset_dir={staging_dataset_dir}，yaml_path={staging_yaml_path}，"
+            f"background_images={background_count}，"
             f"last_yaml_source={last_yaml_source}"
         )
 
@@ -526,5 +642,6 @@ def publish_yolo_dataset(
         f"staging_dataset_dir={staging_dataset_dir}，local_archive_path={archive_resp['output_zip_path']}，"
         f"remote_archive_path={transfer_resp['target_path']}，remote_dataset_dir={remote_dataset_dir.as_posix()}，"
         f"yaml_path={remote_yaml_uri}，unzip_output_dir={unzip_resp['output_dir']}，"
+        f"background_images={background_count}，"
         f"last_yaml_source={last_yaml_source}"
     )
