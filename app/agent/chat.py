@@ -1,6 +1,9 @@
 import os
+import json
 from functools import lru_cache
 from typing import Any
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from dotenv import load_dotenv
 
@@ -26,6 +29,7 @@ from app.tools.dataset_clean_tool import clean_irregular_dataset
 from app.tools.filesystem_toolkit import get_filesystem_tools
 from app.tools.prune_yolo_by_visualized_tool import prune_yolo_by_visualized
 from app.tools.yolo_sliding_window_tool import yolo_sliding_window_crop
+from app.tools.yolo_export_tool import export_yolo_torchscript
 from app.tools.yolo_train_launcher_tool import launch_yolo_training
 
 
@@ -35,7 +39,36 @@ OLLAMA_URL = os.getenv("OLLAMA_URL")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL")
+OPENROUTER_MODELS = os.getenv("OPENROUTER_MODELS")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
+
+def _split_env_models(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _fetch_ollama_models() -> list[str]:
+    if not OLLAMA_URL:
+        return []
+
+    base_url = OLLAMA_URL.rstrip("/")
+    try:
+        with urlopen(f"{base_url}/api/tags", timeout=2) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, URLError, TimeoutError, json.JSONDecodeError):
+        return []
+
+    models = payload.get("models")
+    if not isinstance(models, list):
+        return []
+
+    names: list[str] = []
+    for item in models:
+        if isinstance(item, dict) and isinstance(item.get("name"), str):
+            names.append(item["name"])
+    return names
 
 
 def _handle_tool_error(error: Exception) -> str:
@@ -69,6 +102,7 @@ RAW_TOOLS = {
     split_yolo_dataset.name: split_yolo_dataset,
     prune_yolo_by_visualized.name: prune_yolo_by_visualized,
     yolo_sliding_window_crop.name: yolo_sliding_window_crop,
+    export_yolo_torchscript.name: export_yolo_torchscript,
     launch_yolo_training.name: launch_yolo_training,
 }
 
@@ -79,13 +113,21 @@ TOOLS = {name: _make_safe_tool(tool) for name, tool in RAW_TOOLS.items()}
 
 
 def default_model_selection() -> tuple[str, str]:
-    if OPENROUTER_API_KEY and OPENROUTER_MODEL:
-        return "openrouter", OPENROUTER_MODEL
+    if OLLAMA_URL:
+        ollama_models = _fetch_ollama_models()
+        if OLLAMA_MODEL:
+            return "ollama", OLLAMA_MODEL
+        if ollama_models:
+            return "ollama", ollama_models[0]
+
+    openrouter_model = OPENROUTER_MODEL or next(iter(_split_env_models(OPENROUTER_MODELS)), "")
+    if OPENROUTER_API_KEY and openrouter_model:
+        return "openrouter", openrouter_model
     if OLLAMA_MODEL and OLLAMA_URL:
         return "ollama", OLLAMA_MODEL
     raise RuntimeError(
-        "未找到可用模型配置。请在 .env 中配置 OPENROUTER_API_KEY + OPENROUTER_MODEL，"
-        "或配置 OLLAMA_URL + OLLAMA_MODEL。"
+        "未找到可用模型配置。请确认 OLLAMA_URL 可访问且 /api/tags 至少返回一个模型，"
+        "或在 .env 中配置 OLLAMA_URL + OLLAMA_MODEL。"
     )
 
 
@@ -141,12 +183,8 @@ def get_chat_agent(provider: str | None = None, model: str | None = None) -> Any
     )
 
 
-llm = _build_llm()
-
-agent = get_chat_agent()
-
-
 def _run_agent(history: list[BaseMessage]) -> list[BaseMessage]:
+    agent = get_chat_agent()
     emitted_messages: list[BaseMessage] = []
     seen_messages: set[tuple[Any, ...]] = set()
     has_output = False

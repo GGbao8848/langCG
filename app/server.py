@@ -19,6 +19,7 @@ from app.agent.chat import (
     OLLAMA_URL,
     OLLAMA_MODEL,
     OPENROUTER_MODEL,
+    OPENROUTER_API_KEY,
     TOOLS,
     default_model_selection,
     get_chat_agent,
@@ -299,12 +300,24 @@ def health() -> dict[str, str]:
 
 @app.get("/api/models")
 def models() -> dict[str, Any]:
-    default_provider, default_model = default_model_selection()
-    openrouter_models = _split_env_list(
-        "OPENROUTER_MODELS",
-        [OPENROUTER_MODEL or "", "openrouter/auto", "google/gemini-2.5-flash"],
+    openrouter_models = (
+        _split_env_list(
+            "OPENROUTER_MODELS",
+            [OPENROUTER_MODEL or "", "openrouter/auto", "google/gemini-2.5-flash"],
+        )
+        if OPENROUTER_API_KEY
+        else []
     )
     ollama_models = _fetch_ollama_models()
+    try:
+        default_provider, default_model = default_model_selection()
+    except RuntimeError:
+        default_provider = "ollama" if OLLAMA_URL else "openrouter"
+        default_model = (
+            OLLAMA_MODEL
+            or next(iter(ollama_models), "")
+            or next(iter(openrouter_models), "")
+        )
 
     return {
         "default": {"provider": default_provider, "model": default_model},
