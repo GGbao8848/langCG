@@ -155,6 +155,51 @@ def verify_train_default_resolution() -> None:
         _assert("imgsz=800" in remote_result, f"remote imgsz default drifted: {remote_result}")
 
 
+def verify_xml_to_yolo_output_root_guard() -> None:
+    xml_text = """<annotation>
+  <size><width>100</width><height>50</height></size>
+  <object>
+    <name>target</name>
+    <bndbox><xmin>10</xmin><ymin>5</ymin><xmax>60</xmax><ymax>30</ymax></bndbox>
+  </object>
+</annotation>
+"""
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir) / "sample_cleaned"
+        (root / "images").mkdir(parents=True)
+        (root / "xmls").mkdir(parents=True)
+        (root / "xmls" / "a.xml").write_text(xml_text, encoding="utf-8")
+
+        sibling_output = root.parent / "sample_cleaned_labels"
+        result = TOOLS["convert_xml_to_yolo"].invoke(
+            {
+                "input_dir": str(root),
+                "output_dir": str(sibling_output),
+            }
+        )
+        _assert(f"output_dir={root}" in result, f"xml output root guard did not normalize sibling path: {result}")
+        _assert((root / "labels" / "a.txt").is_file(), "xml labels should be written under input labels")
+        _assert((root / "classes.txt").is_file(), "xml classes should be written under input root")
+        _assert(not sibling_output.exists(), "xml conversion must not create sibling *_labels output")
+
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir) / "sample_cleaned"
+        (root / "images").mkdir(parents=True)
+        (root / "xmls").mkdir(parents=True)
+        (root / "xmls" / "a.xml").write_text(xml_text, encoding="utf-8")
+
+        nested_output = root / "labels"
+        result = TOOLS["convert_xml_to_yolo"].invoke(
+            {
+                "input_dir": str(root),
+                "output_dir": str(nested_output),
+            }
+        )
+        _assert(f"output_dir={root}" in result, f"xml output root guard did not normalize labels path: {result}")
+        _assert((root / "labels" / "a.txt").is_file(), "xml labels should not be nested under labels/labels")
+        _assert(not (root / "labels" / "labels").exists(), "xml conversion must not create labels/labels")
+
+
 def verify_split_smoke() -> None:
     with TemporaryDirectory() as temp_dir:
         root = Path(temp_dir) / "dataset"
@@ -190,6 +235,7 @@ def main() -> None:
         verify_error_wrapping,
         verify_prompt_contracts,
         verify_train_default_resolution,
+        verify_xml_to_yolo_output_root_guard,
         verify_split_smoke,
     ]
     for check in checks:

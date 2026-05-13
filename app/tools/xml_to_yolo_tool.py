@@ -82,6 +82,26 @@ def _default_output_root(input_path: Path) -> Path:
     return input_path
 
 
+def _is_standard_xml_dataset_root(input_path: Path) -> bool:
+    has_xml_dir = any((input_path / dirname).is_dir() for dirname in MARKER_DIRS)
+    has_image_dir = any((input_path / dirname).is_dir() for dirname in IMAGE_DIRNAMES)
+    return has_xml_dir and has_image_dir
+
+
+def _normalize_output_root(input_path: Path, output_dir: Optional[str]) -> tuple[Path, bool]:
+    if not output_dir:
+        return _default_output_root(input_path), False
+
+    output_path = Path(output_dir).expanduser().resolve()
+    if _is_standard_xml_dataset_root(input_path):
+        if output_path == input_path / "labels":
+            return input_path, True
+        if output_path.parent == input_path.parent and output_path.name == f"{input_path.name}_labels":
+            return input_path, True
+
+    return output_path, True
+
+
 def _label_relative_path(xml_path: Path, input_path: Path) -> Path:
     relative = xml_path.relative_to(input_path).with_suffix(".txt")
     parts = list(relative.parts)
@@ -132,6 +152,9 @@ def convert_xml_to_yolo(
     未提供 output_dir 时，会根据 XML 标注目录在其同级生成 labels 目录：
     dataset/xmls/a.xml -> dataset/labels/a.txt。
     提供 output_dir 时，会在 output_dir 内按相对结构生成 labels 目录。
+    对于包含 images/xmls 的标准数据集根目录，如果调用方误传 output_dir=<input>_labels
+    或 output_dir=<input>/labels，工具会自动归一为 input_dir，避免生成兄弟 _labels
+    目录或 labels/labels 嵌套目录。
 
     Args:
         input_dir: 输入目录，递归查找 Pascal VOC XML 文件。
@@ -142,11 +165,7 @@ def convert_xml_to_yolo(
     if not input_path.is_dir():
         raise ValueError(f"input_dir不存在: {input_path}")
 
-    has_explicit_output_dir = bool(output_dir)
-    if output_dir:
-        output_path = Path(output_dir).expanduser().resolve()
-    else:
-        output_path = _default_output_root(input_path)
+    output_path, has_explicit_output_dir = _normalize_output_root(input_path, output_dir)
 
     xml_paths = _list_files(input_path, {".xml"})
     if not xml_paths:
