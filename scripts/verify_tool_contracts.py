@@ -99,6 +99,7 @@ def verify_prompt_contracts() -> None:
     required_fragments = [
         "publish_yolo_dataset",
         "oldyaml",
+        "增量发布时类别以 oldyaml 中的 names 为基准",
         "detector_path",
         "background_dir",
         "annotate_visualize",
@@ -200,6 +201,61 @@ def verify_xml_to_yolo_output_root_guard() -> None:
         _assert(not (root / "labels" / "labels").exists(), "xml conversion must not create labels/labels")
 
 
+def verify_incremental_publish_uses_oldyaml_classes() -> None:
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        detector_root = root / "detector"
+        old_version = "detector_20260501_1200"
+        old_dataset_dir = detector_root / "datasets" / old_version
+        old_dataset_dir.mkdir(parents=True)
+        old_yaml = old_dataset_dir / f"{old_version}.yaml"
+        old_yaml.write_text(
+            "\n".join(
+                [
+                    "train:",
+                    f"- {old_dataset_dir / 'train' / 'images'}",
+                    "names:",
+                    "  0: old_zero",
+                    "  1: old_one",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        input_dir = root / "input_dataset"
+        (input_dir / "train" / "images").mkdir(parents=True)
+        (input_dir / "train" / "labels").mkdir(parents=True)
+        (input_dir / "train" / "images" / "a.jpg").write_bytes(b"")
+        (input_dir / "train" / "labels" / "a.txt").write_text(
+            "0 0.5 0.5 0.1 0.1\n",
+            encoding="utf-8",
+        )
+        (input_dir / "classes.txt").write_text("new_wrong_class\n", encoding="utf-8")
+
+        dataset_version = "detector_20260513_1200"
+        result = TOOLS["publish_yolo_dataset"].invoke(
+            {
+                "input_dir": str(input_dir),
+                "oldyaml": str(old_yaml),
+                "dataset_version": dataset_version,
+            }
+        )
+        output_dir = detector_root / "datasets" / dataset_version
+        output_yaml = output_dir / f"{dataset_version}.yaml"
+        output_classes = output_dir / "classes.txt"
+
+        _assert("mode=local" in result, f"unexpected incremental publish result: {result}")
+        _assert(output_yaml.is_file(), "incremental publish output yaml missing")
+        _assert(output_classes.is_file(), "incremental publish classes.txt missing")
+        yaml_text = output_yaml.read_text(encoding="utf-8")
+        classes_text = output_classes.read_text(encoding="utf-8")
+        _assert("0: old_zero" in yaml_text, f"oldyaml class 0 missing from output yaml: {yaml_text}")
+        _assert("1: old_one" in yaml_text, f"oldyaml class 1 missing from output yaml: {yaml_text}")
+        _assert("new_wrong_class" not in yaml_text, f"input classes leaked into output yaml: {yaml_text}")
+        _assert(classes_text == "old_zero\nold_one\n", f"classes.txt should come from oldyaml: {classes_text!r}")
+
+
 def verify_split_smoke() -> None:
     with TemporaryDirectory() as temp_dir:
         root = Path(temp_dir) / "dataset"
@@ -236,6 +292,7 @@ def main() -> None:
         verify_prompt_contracts,
         verify_train_default_resolution,
         verify_xml_to_yolo_output_root_guard,
+        verify_incremental_publish_uses_oldyaml_classes,
         verify_split_smoke,
     ]
     for check in checks:

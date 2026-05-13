@@ -536,6 +536,9 @@ def publish_yolo_dataset(
             private_key_path=remote_private_key_path,
             port=resolved_remote_port,
         )
+        old_class_names = _class_names_from_yaml_text(last_yaml_text)
+        if old_class_names:
+            class_names = old_class_names
     else:
         context = _apply_remote_defaults(
             _infer_context_from_detector_path(detector_path or ""),
@@ -553,8 +556,6 @@ def publish_yolo_dataset(
     is_remote = bool(context["is_remote"])
     final_dataset_version = dataset_version or _default_dataset_version(detector_name)
 
-    if not class_names and last_yaml_text:
-        class_names = _class_names_from_yaml_text(last_yaml_text)
     if not class_names:
         raise ValueError("未找到classes.txt，且oldyaml中也没有names字段")
 
