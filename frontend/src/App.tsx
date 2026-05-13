@@ -1,5 +1,5 @@
 import { Bot, Loader2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Send, Square } from "lucide-react";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChatMessage } from "./components/ChatMessage";
 import { ChatSidebar } from "./components/ChatSidebar";
 import { ToolSidebar } from "./components/ToolSidebar";
@@ -107,6 +107,7 @@ export default function App() {
   const [savedYoloEnvironmentKey, setSavedYoloEnvironmentKey] = useState("");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const activeAbortControllerRef = useRef<AbortController | null>(null);
   const latestPersistenceStateRef = useRef<PersistedChatState | null>(null);
 
@@ -288,6 +289,16 @@ export default function App() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [currentSession.messages]);
+
+  useLayoutEffect(() => {
+    const textarea = messageInputRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = "auto";
+    if (input) {
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    }
+  }, [input]);
 
   const updateSession = (id: string, fields: Partial<ChatSession>) => {
     setSessions((previous) =>
@@ -687,21 +698,18 @@ export default function App() {
             <div ref={messagesEndRef} />
           </div>
 
-          <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-10 bg-gradient-to-t from-slate-50/95 via-slate-50/80 to-transparent px-4 pb-6 pt-12 backdrop-blur-[2px]">
+          <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-10 bg-slate-50 px-4 pb-6 pt-4">
             <form
               onSubmit={handleSend}
               className="pointer-events-auto relative mx-auto flex max-w-4xl items-end overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-lg transition-all hover:border-slate-300 focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-500/50"
             >
               <textarea
-                className="max-h-48 min-h-14 flex-1 resize-none bg-transparent py-4 pl-6 pr-14 leading-relaxed text-slate-800 outline-none placeholder:text-slate-400"
+                ref={messageInputRef}
+                className="scrollbar-thin max-h-48 min-h-14 flex-1 resize-none overflow-y-auto bg-transparent py-4 pl-6 pr-14 leading-relaxed text-slate-800 outline-none placeholder:text-slate-400"
                 placeholder="输入消息..."
                 value={input}
                 rows={1}
-                onChange={(event) => {
-                  setInput(event.target.value);
-                  event.target.style.height = "auto";
-                  event.target.style.height = `${event.target.scrollHeight}px`;
-                }}
+                onChange={(event) => setInput(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
