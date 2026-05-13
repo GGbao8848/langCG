@@ -3,17 +3,28 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import time
 from pathlib import Path, PurePosixPath
 from typing import Optional
 from urllib.parse import unquote, urlparse
 
+import paramiko
 from langchain.tools import tool
 
 from app.services.user_settings import load_user_settings
+from app.services.publish.remote_transfer_service import _load_private_key
 
 
 def _is_remote_yaml_path(yaml_path: str) -> bool:
     return urlparse(yaml_path.strip()).scheme == "sftp"
+
+
+def _parse_remote_yaml(yaml_path: str) -> tuple[str | None, str | None, int | None]:
+    parsed = urlparse(yaml_path.strip())
+    if parsed.scheme != "sftp":
+        return None, None, None
+    return parsed.hostname, parsed.username, parsed.port
+
 
 def _normalize_yaml_path(yaml_path: str) -> str:
     text = yaml_path.strip()
@@ -154,6 +165,61 @@ def _detect_local_device(yolo_path: Path) -> str:
     return detected[0] if detected[0] in {"0", "mps", "cpu"} else "cpu"
 
 
+def _remote_train_command(
+    *,
+    work_dir: str,
+    command: str,
+) -> str:
+    inner_command = f"cd {shlex.quote(work_dir)} && {command}"
+    return f"bash -l -i -c {shlex.quote(inner_command)}"
+
+
+def _run_remote_training(
+    *,
+    host: str,
+    port: int,
+    username: str,
+    private_key_path: str | None,
+    password: str | None,
+    command: str,
+) -> tuple[int, str, str]:
+    if password and private_key_path:
+        raise ValueError("remote_password和remote_private_key_path不能同时提供")
+    if not password and not private_key_path:
+        raise ValueError("远程训练需要remote_private_key_path或remote_password")
+
+    pkey = _load_private_key(private_key_path) if private_key_path else None
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        client.connect(
+            hostname=host,
+            port=port,
+            username=username,
+            password=password,
+            pkey=pkey,
+            timeout=30,
+            banner_timeout=30,
+            auth_timeout=30,
+        )
+        _, stdout, stderr = client.exec_command(command, get_pty=True)
+        channel = stdout.channel
+        while not channel.exit_status_ready():
+            time.sleep(0.2)
+        exit_code = channel.recv_exit_status()
+        stdout_text = stdout.read().decode("utf-8", errors="replace").strip()
+        stderr_text = stderr.read().decode("utf-8", errors="replace").strip()
+        return exit_code, stdout_text, stderr_text
+    except paramiko.AuthenticationException as exc:
+        raise ValueError(f"SSH认证失败: {exc}") from exc
+    except paramiko.SSHException as exc:
+        raise ValueError(f"SSH连接失败: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"SSH执行失败: {exc}") from exc
+    finally:
+        client.close()
+
+
 @tool
 def launch_yolo_training(
     yaml_path: str,
@@ -170,6 +236,10 @@ def launch_yolo_training(
     execute: bool = False,
     require_exists: bool = False,
     local_venv_path: Optional[str] = None,
+    remote_username: Optional[str] = None,
+    remote_private_key_path: Optional[str] = None,
+    remote_password: Optional[str] = None,
+    remote_port: Optional[int] = None,
 ) -> str:
     """生成或启动YOLO训练命令，支持本地yaml路径和sftp://host/path.yaml路径。
 
@@ -188,8 +258,13 @@ def launch_yolo_training(
         execute: 是否真正启动训练；默认False，只返回cd目录和命令。
         require_exists: 是否要求yaml文件在当前机器存在；远端sftp路径默认不强制检查。
         local_venv_path: 本地YOLO训练虚拟环境目录或python路径；默认读取前端保存的local_yolo_train_venv_path。
+        remote_username: 远程训练用户名；默认读取左侧保存配置或sftp路径中的用户名。
+        remote_private_key_path: 远程训练私钥路径；默认读取左侧保存配置。
+        remote_password: 远程训练密码。
+        remote_port: 远程训练SSH端口；默认读取左侧保存配置或sftp路径端口。
     """
     is_remote = _is_remote_yaml_path(yaml_path)
+    yaml_host, yaml_username, yaml_port = _parse_remote_yaml(yaml_path)
     data_path = _normalize_yaml_path(yaml_path)
     _assert_yaml_file(data_path, require_exists=require_exists or not is_remote)
     if not model.strip():
@@ -202,6 +277,10 @@ def launch_yolo_training(
     resolved_device = device
 
     user_settings = load_user_settings()
+    configured_host = str(user_settings.get("remote_sftp_host") or "").strip()
+    configured_username = str(user_settings.get("remote_sftp_username") or "").strip()
+    configured_key = str(user_settings.get("remote_sftp_private_key_path") or "").strip()
+    configured_port = int(user_settings.get("remote_sftp_port") or 22)
     resolved_local_venv_path = (
         (local_venv_path or "").strip()
         or str(user_settings.get("local_yolo_train_venv_path") or "").strip()
@@ -235,6 +314,10 @@ def launch_yolo_training(
     )
     command = " ".join(command_parts)
     cd_command = f'cd "{resolved_work_dir}" && {command}'
+    remote_command = _remote_train_command(
+        work_dir=resolved_work_dir,
+        command=command,
+    )
 
     if not execute:
         return (
@@ -247,7 +330,47 @@ def launch_yolo_training(
             f"batch={resolved_batch}\n"
             f"device={resolved_device or ''}\n"
             f"local_venv_path={resolved_local_venv_path if not is_remote else ''}\n"
-            f"command={cd_command}"
+            f"command={remote_command if is_remote else cd_command}"
+        )
+
+    if is_remote:
+        resolved_remote_host = yaml_host or configured_host
+        resolved_remote_username = (
+            (remote_username or "").strip()
+            or yaml_username
+            or configured_username
+        )
+        resolved_remote_key = (remote_private_key_path or "").strip() or configured_key or None
+        resolved_remote_port = remote_port or yaml_port or configured_port or 22
+        if not resolved_remote_host:
+            raise ValueError("远程训练无法确定host，请使用sftp://host/path.yaml或配置remote_sftp_host")
+        if not resolved_remote_username:
+            raise ValueError("远程训练需要remote_username或左侧保存的remote_sftp_username")
+
+        exit_code, stdout_text, stderr_text = _run_remote_training(
+            host=resolved_remote_host,
+            port=resolved_remote_port,
+            username=resolved_remote_username,
+            private_key_path=resolved_remote_key,
+            password=remote_password,
+            command=remote_command,
+        )
+        stdout_suffix = f"\nstdout={stdout_text[-2000:]}" if stdout_text else ""
+        stderr_suffix = f"\nstderr={stderr_text[-1000:]}" if stderr_text else ""
+        if exit_code != 0:
+            raise ValueError(
+                f"远程训练执行失败，exit={exit_code}{stdout_suffix}{stderr_suffix}"
+            )
+        return (
+            "远程训练命令执行完成。\n"
+            "mode=remote_ssh\n"
+            f"host={resolved_remote_host}\n"
+            f"port={resolved_remote_port}\n"
+            f"cwd={resolved_work_dir}\n"
+            f"project={resolved_project_dir}\n"
+            f"command={remote_command}"
+            f"{stdout_suffix}"
+            f"{stderr_suffix}"
         )
 
     Path(resolved_project_dir).expanduser().mkdir(parents=True, exist_ok=True)

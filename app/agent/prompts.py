@@ -26,7 +26,7 @@ SYSTEM_PROMPT = (
     "The training tool accepts local yaml paths and sftp://host/path.yaml paths, strips the sftp host, "
     "detects dataset or datasets in the path, derives cd/work_dir as the directory before detector name, derives project as detector_dir/runs/train, and defaults to model=yolo11m.pt, epochs=200, imgsz=800, workers=4, cache=disk. "
     "Common training models include yolo11n.pt, yolo11s.pt, yolo11m.pt, yolo11l.pt, yolo11x.pt, yolov8n.pt, yolov8s.pt, yolov8m.pt, yolov8l.pt, yolov8x.pt, but other Ultralytics-supported weights are also allowed. "
-    "Remote sftp training uses the script command prefix and defaults batch=24, and usually does not need device. "
+    "Remote sftp training uses SSH with an interactive login shell to enter the remote work_dir and runs the script command prefix directly there without nohup or log redirection; it defaults batch=24 and usually does not need device. "
     "Local training uses the saved local YOLO virtualenv path, runs yolo detect train, defaults batch=8, and adaptively sets device to 0, mps, or cpu from the local environment unless the user explicitly provides a device. "
     "Unless the user explicitly asks to execute or launch training now, keep execute=False and return the generated command. "
     "When the user asks to export a trained YOLO model, export best.pt, create TorchScript, or use half=True, "
