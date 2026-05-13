@@ -14,6 +14,17 @@ from langchain_core.tools import tool
 from app.services.user_settings import load_user_settings
 from app.services.publish.remote_transfer_service import _load_private_key
 
+LOCAL_TRAIN_DEFAULTS = {
+    "model": "yolo11s.pt",
+    "epochs": 120,
+    "imgsz": 640,
+}
+REMOTE_TRAIN_DEFAULTS = {
+    "model": "yolo11m.pt",
+    "epochs": 200,
+    "imgsz": 800,
+}
+
 
 def _is_remote_yaml_path(yaml_path: str) -> bool:
     return urlparse(yaml_path.strip()).scheme == "sftp"
@@ -223,9 +234,9 @@ def _run_remote_training(
 @tool(parse_docstring=True)
 def launch_yolo_training(
     yaml_path: str,
-    model: str = "yolo11m.pt",
-    epochs: int = 200,
-    imgsz: int = 800,
+    model: Optional[str] = None,
+    epochs: Optional[int] = None,
+    imgsz: Optional[int] = None,
     batch: Optional[int] = None,
     workers: int = 4,
     cache: str = "disk",
@@ -245,9 +256,9 @@ def launch_yolo_training(
 
     Args:
         yaml_path: 数据集yaml路径，可为本地路径、file://路径或sftp://host/path.yaml。
-        model: 模型权重，默认yolo11m.pt；常用值包括yolo11n/s/m/l/x.pt和yolov8n/s/m/l/x.pt，也允许其他Ultralytics支持的权重路径或名称。
-        epochs: 训练轮数，默认200。
-        imgsz: 图像尺寸，默认800。
+        model: 模型权重，未传时按训练位置决定：本地yolo11s.pt，远程yolo11m.pt；常用值包括yolo11n/s/m/l/x.pt和yolov8n/s/m/l/x.pt，也允许其他Ultralytics支持的权重路径或名称。
+        epochs: 训练轮数，未传时按训练位置决定：本地120，远程200。
+        imgsz: 图像尺寸，未传时按训练位置决定：本地640，远程800。
         batch: batch大小；远程训练默认24，本地训练默认8。
         workers: dataloader workers，默认4。
         cache: cache参数，默认disk。
@@ -265,9 +276,13 @@ def launch_yolo_training(
     """
     is_remote = _is_remote_yaml_path(yaml_path)
     yaml_host, yaml_username, yaml_port = _parse_remote_yaml(yaml_path)
+    train_defaults = REMOTE_TRAIN_DEFAULTS if is_remote else LOCAL_TRAIN_DEFAULTS
+    resolved_model = (model or str(train_defaults["model"])).strip()
+    resolved_epochs = epochs if epochs is not None else int(train_defaults["epochs"])
+    resolved_imgsz = imgsz if imgsz is not None else int(train_defaults["imgsz"])
     data_path = _normalize_yaml_path(yaml_path)
     _assert_yaml_file(data_path, require_exists=require_exists or not is_remote)
-    if not model.strip():
+    if not resolved_model:
         raise ValueError("model不能为空")
 
     resolved_work_dir, default_project_dir = _derive_train_dirs(data_path)
@@ -294,7 +309,7 @@ def launch_yolo_training(
     resolved_command_prefix = command_prefix.strip() if is_remote else str(local_yolo_path)
     if not resolved_command_prefix:
         raise ValueError("command_prefix不能为空")
-    if epochs <= 0 or imgsz <= 0 or resolved_batch <= 0 or workers < 0:
+    if resolved_epochs <= 0 or resolved_imgsz <= 0 or resolved_batch <= 0 or workers < 0:
         raise ValueError("epochs/imgsz/batch必须为正数，workers不能为负数")
     if not cache.strip():
         raise ValueError("cache不能为空")
@@ -304,9 +319,9 @@ def launch_yolo_training(
         project_dir=resolved_project_dir,
         name=resolved_name,
         command_prefix=resolved_command_prefix,
-        model=model,
-        epochs=epochs,
-        imgsz=imgsz,
+        model=resolved_model,
+        epochs=resolved_epochs,
+        imgsz=resolved_imgsz,
         batch=resolved_batch,
         workers=workers,
         cache=cache,
@@ -327,6 +342,9 @@ def launch_yolo_training(
             f"work_dir={resolved_work_dir}\n"
             f"project={resolved_project_dir}\n"
             f"name={resolved_name}\n"
+            f"model={resolved_model}\n"
+            f"epochs={resolved_epochs}\n"
+            f"imgsz={resolved_imgsz}\n"
             f"batch={resolved_batch}\n"
             f"device={resolved_device or ''}\n"
             f"local_venv_path={resolved_local_venv_path if not is_remote else ''}\n"
@@ -368,6 +386,9 @@ def launch_yolo_training(
             f"port={resolved_remote_port}\n"
             f"cwd={resolved_work_dir}\n"
             f"project={resolved_project_dir}\n"
+            f"model={resolved_model}\n"
+            f"epochs={resolved_epochs}\n"
+            f"imgsz={resolved_imgsz}\n"
             f"command={remote_command}"
             f"{stdout_suffix}"
             f"{stderr_suffix}"
@@ -391,6 +412,9 @@ def launch_yolo_training(
         f"pid={process.pid}\n"
         f"cwd={resolved_work_dir}\n"
         f"project={resolved_project_dir}\n"
+        f"model={resolved_model}\n"
+        f"epochs={resolved_epochs}\n"
+        f"imgsz={resolved_imgsz}\n"
         f"device={resolved_device or ''}\n"
         f"log={log_path}\n"
         f"command={command}"

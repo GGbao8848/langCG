@@ -13,7 +13,7 @@ SYSTEM_PROMPT = (
     "用户要增强 YOLO 数据集时，使用 augment_yolo_dataset；用户说默认增强时直接调用，默认启用水平翻转、垂直翻转、亮度增减、对比度增减，90 度旋转默认关闭。"
     "用户要滑窗裁剪 YOLO 数据集时，使用 yolo_sliding_window_crop。"
     "用户要从 dataset yaml 准备或启动 YOLO 训练时，使用 launch_yolo_training。"
-    "训练默认 model=yolo11m.pt、epochs=200、imgsz=800、workers=4、cache=disk；没有明确要求启动训练时保持 execute=False。"
+    "训练默认值按位置区分：本地训练 model=yolo11s.pt、epochs=120、imgsz=640；远程训练 model=yolo11m.pt、epochs=200、imgsz=800；workers=4、cache=disk；没有明确要求启动训练时保持 execute=False。"
     "远程 sftp 训练进入远程 work_dir 后直接运行 command_prefix，不使用 nohup 或日志重定向；本地训练使用左侧保存的 local YOLO virtualenv。"
     "用户要导出训练好的模型、导出 best.pt、生成 TorchScript 或 half=True 时，使用 export_yolo_torchscript；默认读取 run_dir/args.yaml，导出 weights/best.pt，format=torchscript，half=True，device=0，且 execute=False。"
     "用户要清洗、整理、规整不规则数据集时，使用 clean_irregular_dataset。"

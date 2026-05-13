@@ -64,9 +64,9 @@ def verify_defaults() -> None:
 
     train_props = _properties("launch_yolo_training")
     expected_train_defaults = {
-        "model": "yolo11m.pt",
-        "epochs": 200,
-        "imgsz": 800,
+        "model": None,
+        "epochs": None,
+        "imgsz": None,
         "workers": 4,
         "cache": "disk",
         "command_prefix": "subyolo",
@@ -107,6 +107,8 @@ def verify_prompt_contracts() -> None:
         "augment_yolo_dataset",
         "yolo_sliding_window_crop",
         "launch_yolo_training",
+        "本地训练 model=yolo11s.pt、epochs=120、imgsz=640",
+        "远程训练 model=yolo11m.pt、epochs=200、imgsz=800",
         "cache=disk",
         "execute=False",
         "export_yolo_torchscript",
@@ -117,6 +119,40 @@ def verify_prompt_contracts() -> None:
     ]
     missing = [fragment for fragment in required_fragments if fragment not in SYSTEM_PROMPT]
     _assert(not missing, f"SYSTEM_PROMPT missing routing/default fragments: {missing}")
+
+
+def verify_train_default_resolution() -> None:
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        local_yaml = root / "louyou" / "datasets" / "louyou_20260513" / "louyou_20260513.yaml"
+        local_yaml.parent.mkdir(parents=True)
+        local_yaml.write_text("path: .\nnames: [target]\n", encoding="utf-8")
+        fake_venv = root / "venv"
+        (fake_venv / "bin").mkdir(parents=True)
+        fake_yolo = fake_venv / "bin" / "yolo"
+        fake_yolo.write_text("#!/bin/sh\n", encoding="utf-8")
+        fake_yolo.chmod(0o755)
+
+        local_result = TOOLS["launch_yolo_training"].invoke(
+            {
+                "yaml_path": str(local_yaml),
+                "local_venv_path": str(fake_venv),
+            }
+        )
+        _assert("mode=local_venv" in local_result, f"unexpected local training preview: {local_result}")
+        _assert("model=yolo11s.pt" in local_result, f"local model default drifted: {local_result}")
+        _assert("epochs=120" in local_result, f"local epochs default drifted: {local_result}")
+        _assert("imgsz=640" in local_result, f"local imgsz default drifted: {local_result}")
+
+        remote_result = TOOLS["launch_yolo_training"].invoke(
+            {
+                "yaml_path": "sftp://train.example.com/data/louyou/datasets/louyou_20260513/louyou_20260513.yaml",
+            }
+        )
+        _assert("mode=remote_script" in remote_result, f"unexpected remote training preview: {remote_result}")
+        _assert("model=yolo11m.pt" in remote_result, f"remote model default drifted: {remote_result}")
+        _assert("epochs=200" in remote_result, f"remote epochs default drifted: {remote_result}")
+        _assert("imgsz=800" in remote_result, f"remote imgsz default drifted: {remote_result}")
 
 
 def verify_split_smoke() -> None:
@@ -153,6 +189,7 @@ def main() -> None:
         verify_defaults,
         verify_error_wrapping,
         verify_prompt_contracts,
+        verify_train_default_resolution,
         verify_split_smoke,
     ]
     for check in checks:
