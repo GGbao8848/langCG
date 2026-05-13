@@ -7,7 +7,7 @@ FRONTEND_HOST ?= 127.0.0.1
 FRONTEND_PORT ?= 8765
 PYTHON ?= .venv/bin/python
 
-.PHONY: run backend frontend lint
+.PHONY: run backend frontend lint verify-tools
 
 run:
 	@set -euo pipefail; \
@@ -78,3 +78,7 @@ frontend:
 lint:
 	cd frontend && npm run lint
 	$(PYTHON) -m compileall app
+	$(PYTHON) scripts/verify_tool_contracts.py
+
+verify-tools:
+	$(PYTHON) scripts/verify_tool_contracts.py
