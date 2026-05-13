@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from langchain.tools import tool
+from langchain_core.tools import tool
 
 
 def _parse_index_list(indices: str) -> list[str]:
@@ -126,7 +126,7 @@ def _rewrite_label_file(label_path: Path, output_path: Path, mapping: dict[str, 
     return total, changed
 
 
-@tool
+@tool(parse_docstring=True)
 def reindex_yolo_labels(
     input_dir: str,
     source_indices: Optional[str] = None,
@@ -139,6 +139,13 @@ def reindex_yolo_labels(
     示例：
     - source_indices='1,2', target_index='0'
     - mapping='0->0,1->0,2->3,5->1'
+
+    Args:
+        input_dir: 输入 YOLO labels 根目录或数据集根目录，递归处理其中的 txt 标签。
+        source_indices: 需要改写的原始类别索引列表，逗号分隔；与 target_index 配合使用。
+        target_index: source_indices 中所有类别要改成的目标索引。
+        mapping: 显式索引映射，例如 0->0,1->0,2->3；提供后优先于 source_indices/target_index。
+        output_dir: 输出目录；为空时原地改写。
     """
     input_path = Path(input_dir).expanduser().resolve()
     if not input_path.is_dir():

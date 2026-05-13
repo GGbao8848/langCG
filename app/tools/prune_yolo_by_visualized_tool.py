@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from langchain.tools import tool
+from langchain_core.tools import tool
 
 from app.tools.dataset_clean_tool import IMAGE_SUFFIXES
 
@@ -52,7 +52,7 @@ def _remove_or_move(path: Path, dataset_root: Path, trash_dir: Optional[Path]) -
     return target
 
 
-@tool
+@tool(parse_docstring=True)
 def prune_yolo_by_visualized(
     input_dir: str,
     dry_run: bool = True,

@@ -6,7 +6,8 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
 import yaml
-from langchain.tools import tool
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field, model_validator
 
 from app.services.publish import (
     read_sftp_file_text,
@@ -18,6 +19,34 @@ from app.services.user_settings import load_user_settings
 from app.tools.dataset_clean_tool import IMAGE_SUFFIXES
 
 _DEFAULT_SPLITS = ["train", "val", "test"]
+
+
+class PublishYoloDatasetArgs(BaseModel):
+    input_dir: str = Field(
+        default="",
+        description="输入数据集目录。若只追加background，可传空字符串，但必须提供oldyaml。",
+    )
+    input_dirs: list[str] | None = Field(default=None, description="可选的额外输入数据集目录。")
+    background_dir: str | None = Field(
+        default=None,
+        description="可选的background图像目录，发布时自动加入background/images并创建空labels。",
+    )
+    background_dirs: list[str] | None = Field(default=None, description="可选的额外background图像目录。")
+    oldyaml: str | None = Field(default=None, description="旧版yaml路径或sftp路径；提供时表示增量发布。")
+    detector_path: str | None = Field(default=None, description="detector目录路径；未提供oldyaml时必填。")
+    dataset_version: str | None = Field(default=None, description="可选的新数据集版本名。")
+    remote_username: str | None = Field(default=None, description="远程用户名；默认读取左侧保存配置。")
+    remote_private_key_path: str | None = Field(default=None, description="远程私钥路径；默认读取左侧保存配置。")
+    remote_password: str | None = Field(default=None, description="远程密码。")
+    remote_port: int | None = Field(default=None, description="远程端口；默认读取左侧保存配置。")
+
+    @model_validator(mode="after")
+    def validate_publish_context(self) -> "PublishYoloDatasetArgs":
+        oldyaml = (self.oldyaml or "").strip()
+        detector_path = (self.detector_path or "").strip()
+        if not oldyaml and not detector_path:
+            raise ValueError("必须提供oldyaml或detector_path中的一个")
+        return self
 
 
 def _report_stage(current: int, total: int, message: str) -> None:
@@ -434,7 +463,7 @@ def _remote_yaml_path(host: str, port: int, remote_yaml: PurePosixPath, username
     return f"sftp://{prefix}{host}:{port}{remote_yaml.as_posix()}"
 
 
-@tool
+@tool(args_schema=PublishYoloDatasetArgs)
 def publish_yolo_dataset(
     input_dir: str = "",
     input_dirs: list[str] | None = None,

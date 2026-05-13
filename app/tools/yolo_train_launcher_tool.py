@@ -9,7 +9,7 @@ from typing import Optional
 from urllib.parse import unquote, urlparse
 
 import paramiko
-from langchain.tools import tool
+from langchain_core.tools import tool
 
 from app.services.user_settings import load_user_settings
 from app.services.publish.remote_transfer_service import _load_private_key
@@ -220,7 +220,7 @@ def _run_remote_training(
         client.close()
 
 
-@tool
+@tool(parse_docstring=True)
 def launch_yolo_training(
     yaml_path: str,
     model: str = "yolo11m.pt",

@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from langchain.tools import tool
+from langchain_core.tools import tool
 
 from app.tools.dataset_clean_tool import IMAGE_SUFFIXES
 
@@ -60,7 +60,7 @@ def _copy_pair(
     shutil.copy2(label_path, target_label)
 
 
-@tool
+@tool(parse_docstring=True)
 def split_yolo_dataset(
     input_dir: str,
     mode: str = "train_val",

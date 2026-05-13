@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
-from langchain.tools import tool
+from langchain_core.tools import tool
 
 from app.services.user_settings import load_user_settings
 
@@ -67,7 +67,7 @@ def _quote_command(args: list[str]) -> str:
     return " ".join(shlex.quote(arg) for arg in args)
 
 
-@tool
+@tool(parse_docstring=True)
 def export_yolo_torchscript(
     run_dir: str,
     execute: bool = False,

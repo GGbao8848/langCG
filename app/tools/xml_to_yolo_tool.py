@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import xml.etree.ElementTree as ET
 
-from langchain.tools import tool
+from langchain_core.tools import tool
 
 from app.tools.dataset_clean_tool import IMAGE_SUFFIXES, _extract_valid_xml_object, _list_files
 
@@ -121,7 +121,7 @@ def _label_output_path(
     return _source_label_path(xml_path, input_path)
 
 
-@tool
+@tool(parse_docstring=True)
 def convert_xml_to_yolo(
     input_dir: str,
     output_dir: Optional[str] = None,
@@ -132,6 +132,11 @@ def convert_xml_to_yolo(
     未提供 output_dir 时，会根据 XML 标注目录在其同级生成 labels 目录：
     dataset/xmls/a.xml -> dataset/labels/a.txt。
     提供 output_dir 时，会在 output_dir 内按相对结构生成 labels 目录。
+
+    Args:
+        input_dir: 输入目录，递归查找 Pascal VOC XML 文件。
+        output_dir: 输出根目录；为空时在 XML 标注目录同级生成 labels 目录。
+        classes: 类别名称列表，使用逗号分隔；为空时按扫描到的类别名称动态追加。
     """
     input_path = Path(input_dir).expanduser().resolve()
     if not input_path.is_dir():

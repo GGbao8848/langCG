@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from langchain.tools import tool
+from langchain_core.tools import tool
 from PIL import Image, ImageEnhance
 
 from app.tools.dataset_clean_tool import IMAGE_SUFFIXES
@@ -143,7 +143,7 @@ def _selected_augmentations(
     return selected
 
 
-@tool
+@tool(parse_docstring=True)
 def augment_yolo_dataset(
     input_dir: str,
     output_dir: Optional[str] = None,
@@ -158,7 +158,22 @@ def augment_yolo_dataset(
     rotate_left90: Optional[bool] = None,
     rotate_right90: Optional[bool] = None,
 ) -> str:
-    """增强 YOLO 数据集，只保留翻转、亮度、对比度和可选 90 度旋转。"""
+    """增强 YOLO 数据集，只保留翻转、亮度、对比度和可选 90 度旋转。
+
+    Args:
+        input_dir: 输入 YOLO 数据集根目录，可递归查找成对的 images/labels 目录。
+        output_dir: 输出目录，默认写入 input_dir/augment。
+        horizontal_flip: 是否生成水平翻转样本，默认 True。
+        vertical_flip: 是否生成垂直翻转样本，默认 True。
+        brightness_up: 是否生成亮度增强样本，默认 True。
+        brightness_down: 是否生成亮度降低样本，默认 True。
+        contrast_up: 是否生成对比度增强样本，默认 True。
+        contrast_down: 是否生成对比度降低样本，默认 True。
+        rotate_left_90: 是否生成逆时针 90 度旋转样本，默认 False。
+        rotate_right_90: 是否生成顺时针 90 度旋转样本，默认 False。
+        rotate_left90: rotate_left_90 的兼容别名。
+        rotate_right90: rotate_right_90 的兼容别名。
+    """
     input_path = Path(input_dir).expanduser().resolve()
     if not input_path.is_dir():
         raise ValueError(f"input_dir不存在: {input_path}")

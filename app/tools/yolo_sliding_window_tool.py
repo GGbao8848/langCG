@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from langchain.tools import tool
+from langchain_core.tools import tool
 from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
 
@@ -161,7 +161,7 @@ def _build_crop_labels(
     return written_lines
 
 
-@tool
+@tool(parse_docstring=True)
 def yolo_sliding_window_crop(
     input_dir: str,
     output_dir: Optional[str] = None,

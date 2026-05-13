@@ -76,6 +76,10 @@ def _handle_tool_error(error: Exception) -> str:
     return f"tool执行失败: {error}"
 
 
+def _handle_tool_validation_error(error: Exception) -> str:
+    return f"tool执行失败: {error}"
+
+
 def _make_safe_tool(tool: BaseTool) -> StructuredTool:
     def _safe_func(**kwargs: Any) -> str:
         try:
@@ -91,6 +95,7 @@ def _make_safe_tool(tool: BaseTool) -> StructuredTool:
         args_schema=tool.args_schema,
         return_direct=tool.return_direct,
         response_format=tool.response_format,
+        handle_validation_error=_handle_tool_validation_error,
     )
 
 RAW_TOOLS = {

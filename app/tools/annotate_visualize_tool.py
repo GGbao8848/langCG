@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 import xml.etree.ElementTree as ET
 
-from langchain.tools import tool
+from langchain_core.tools import tool
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
 from app.tools.dataset_clean_tool import IMAGE_SUFFIXES, _extract_valid_xml_object
@@ -157,13 +157,19 @@ def _draw_boxes(
         draw.text((x1 + 2, max(0, y1 - 16)), label, fill=color, font=font)
 
 
-@tool
+@tool(parse_docstring=True)
 def annotate_visualize(
     input_dir: str,
     annotation_format: Optional[str] = None,
     line_width: int = 2,
 ) -> str:
-    """可视化 YOLO 或 Pascal VOC XML 标注，输出到与 images 同级的 visualized。"""
+    """可视化 YOLO 或 Pascal VOC XML 标注，输出到与 images 同级的 visualized。
+
+    Args:
+        input_dir: 输入数据集根目录，可递归查找其中的 images 目录。
+        annotation_format: 标注格式，可选 yolo 或 xml；为空时自动检测，混合格式时需要显式指定。
+        line_width: 绘制标注框的线宽，默认 2。
+    """
     input_path = Path(input_dir).expanduser().resolve()
     if not input_path.is_dir():
         raise ValueError(f"input_dir不存在: {input_path}")

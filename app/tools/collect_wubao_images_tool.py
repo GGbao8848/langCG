@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from langchain.tools import tool
+from langchain_core.tools import tool
 
 
 def _normalize_root(root: str) -> Path:
@@ -43,7 +43,7 @@ def _dedupe_target(output_dir: Path, filename: str) -> Path:
     return target
 
 
-@tool
+@tool(parse_docstring=True)
 def collect_wubao_images(
     root: str,
     prefix: str = "wubao",

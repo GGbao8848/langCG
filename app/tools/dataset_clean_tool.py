@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Sequence
 import shutil
 import xml.etree.ElementTree as ET
 
-from langchain.tools import tool
+from langchain_core.tools import tool
 from PIL import Image, UnidentifiedImageError
 
 Image.MAX_IMAGE_PIXELS = None
@@ -239,7 +239,7 @@ def _normalize_xml_content(
     return ET.tostring(annotation, encoding="unicode")
 
 
-@tool
+@tool(parse_docstring=True)
 def clean_irregular_dataset(
     input_dir: str,
     output_dir: Optional[str] = None,
@@ -251,6 +251,10 @@ def clean_irregular_dataset(
     - images / labels / xml / xmls 命名不统一
     - 存在多层嵌套的不规则目录
     - 坏图、空 xml、空 txt
+
+    Args:
+        input_dir: 输入的不规则数据集根目录。
+        output_dir: 输出目录；为空时生成到同级 <input>_cleaned。
     """
     input_path = Path(input_dir).expanduser().resolve()
     if not input_path.is_dir():
