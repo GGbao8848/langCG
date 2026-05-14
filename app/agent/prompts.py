@@ -6,6 +6,7 @@ SYSTEM_PROMPT = (
     "远程 SFTP 的 host、username、private key path、port 来自左侧边栏保存的用户信息，不要要求用户改 .env。"
     "用户要发布 YOLO 数据集、使用 oldyaml 做增量发布、发布到 detector_path、老模型迭代、追加误报图或 background 图时，使用 publish_yolo_dataset。"
     "有 oldyaml 就按增量发布处理；没有 oldyaml 时需要 detector_path，detector_path 最后一段视为 detector_name。"
+    "oldyaml 是历史版本 yaml 文件路径，必须原样传给工具，不要在 datasets 后额外插入 detector_name，也不要把旧版本号当成本次 dataset_version。"
     "增量发布时类别以 oldyaml 中的 names 为基准，不使用新输入数据集的 classes.txt 覆盖旧模型类别。"
     "误报图和 background 图传入 background_dir 或 background_dirs；如果只追加 background 且没有正样本，调用 publish_yolo_dataset 时 input_dir=\"\"，并且必须带 oldyaml。"
     "用户要可视化标注、画框、渲染标签时，使用 annotate_visualize；如果同一数据单元同时存在 YOLO 和 XML 标注，不要静默选择，先问用户用 yolo 还是 xml。"

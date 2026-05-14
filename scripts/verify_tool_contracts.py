@@ -99,6 +99,7 @@ def verify_prompt_contracts() -> None:
     required_fragments = [
         "publish_yolo_dataset",
         "oldyaml",
+        "oldyaml 是历史版本 yaml 文件路径，必须原样传给工具",
         "增量发布时类别以 oldyaml 中的 names 为基准",
         "detector_path",
         "background_dir",
@@ -209,6 +210,7 @@ def verify_incremental_publish_uses_oldyaml_classes() -> None:
         old_dataset_dir = detector_root / "datasets" / old_version
         old_dataset_dir.mkdir(parents=True)
         old_yaml = old_dataset_dir / f"{old_version}.yaml"
+        agent_mangled_old_yaml = old_dataset_dir.parent / detector_root.name / old_version / f"{old_version}.yaml"
         old_yaml.write_text(
             "\n".join(
                 [
@@ -237,7 +239,7 @@ def verify_incremental_publish_uses_oldyaml_classes() -> None:
         result = TOOLS["publish_yolo_dataset"].invoke(
             {
                 "input_dir": str(input_dir),
-                "oldyaml": str(old_yaml),
+                "oldyaml": str(agent_mangled_old_yaml),
                 "dataset_version": dataset_version,
             }
         )

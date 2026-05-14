@@ -74,6 +74,42 @@ def _parse_remote_like(value: str) -> tuple[str | None, int | None, PurePosixPat
     return None, None, PurePosixPath(text)
 
 
+def _replace_remote_like_path(value: str, next_path: PurePosixPath) -> str:
+    text = value.strip()
+    path_text = next_path.as_posix()
+    if text.startswith(("sftp://", "ssh://")):
+        parsed = urlparse(text)
+        return parsed._replace(path=path_text).geturl()
+
+    scp_match = re.match(r"^([^@]+@[^:]+):(.+)$", text)
+    if scp_match:
+        return f"{scp_match.group(1)}:{path_text}"
+
+    colon_match = re.match(r"^([^@:]+):(.+)$", text)
+    if colon_match:
+        return f"{colon_match.group(1)}:{path_text}"
+
+    return path_text
+
+
+def _normalize_oldyaml_text(oldyaml: str) -> str:
+    """Repair a common agent mistake: .../<detector>/datasets/<detector>/<version>/<version>.yaml."""
+    _, _, path = _parse_remote_like(oldyaml)
+    parts = path.parts
+    bucket_idx = next((i for i, part in enumerate(parts) if part in {"dataset", "datasets"}), None)
+    if bucket_idx is None or bucket_idx < 1 or len(parts) <= bucket_idx + 3:
+        return oldyaml
+
+    detector_name = parts[bucket_idx - 1]
+    inserted_detector = parts[bucket_idx + 1]
+    candidate_version = parts[bucket_idx + 2]
+    if inserted_detector != detector_name or Path(path.name).stem != candidate_version:
+        return oldyaml
+
+    normalized_path = PurePosixPath(*parts[: bucket_idx + 1], *parts[bucket_idx + 2 :])
+    return _replace_remote_like_path(oldyaml, normalized_path)
+
+
 def _extract_remote_username(value: str | None) -> str | None:
     if not value:
         return None
@@ -493,6 +529,8 @@ def publish_yolo_dataset(
         remote_port: 远程端口；默认读取左侧保存配置。
     """
     oldyaml = (oldyaml or "").strip() or None
+    if oldyaml:
+        oldyaml = _normalize_oldyaml_text(oldyaml)
     detector_path = (detector_path or "").strip() or None
     if not oldyaml and not detector_path:
         raise ValueError("必须提供oldyaml或detector_path中的一个")
