@@ -168,9 +168,13 @@ def _build_llm(
             model=model,
             base_url=OLLAMA_URL,
             temperature=0,
-            max_tokens=None,
-            client_kwargs={"trust_env": False},
-            sync_client_kwargs={"trust_env": False},
+            num_ctx=8192,
+            num_predict=2048,
+            repeat_penalty=1.05,
+            keep_alive="30m",
+            client_kwargs={"trust_env": False, "timeout": 120},
+            sync_client_kwargs={"trust_env": False, "timeout": 120},
+            async_client_kwargs={"trust_env": False, "timeout": 120},
         )
 
     raise RuntimeError(f"不支持的 LLM provider: {provider}")
