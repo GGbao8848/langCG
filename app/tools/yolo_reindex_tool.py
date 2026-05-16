@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -126,6 +127,14 @@ def _rewrite_label_file(label_path: Path, output_path: Path, mapping: dict[str, 
     return total, changed
 
 
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
 @tool(parse_docstring=True)
 def reindex_yolo_labels(
     input_dir: str,
@@ -156,9 +165,14 @@ def reindex_yolo_labels(
     else:
         output_path = input_path
 
+    if output_path != input_path:
+        if _is_relative_to(output_path, input_path):
+            raise ValueError("output_dir不能位于input_dir内部，避免递归复制污染数据集")
+        shutil.copytree(input_path, output_path, dirs_exist_ok=True)
+
     mapping_dict = _build_mapping(source_indices, target_index, mapping)
 
-    label_files = sorted(input_path.rglob("*.txt"))
+    label_files = sorted(path for path in input_path.rglob("*.txt") if path.name != "classes.txt")
     if not label_files:
         raise ValueError(f"在目录下未找到txt标签文件: {input_path}")
 

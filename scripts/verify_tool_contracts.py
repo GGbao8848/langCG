@@ -11,7 +11,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.agent.chat import RAW_TOOLS, TOOLS
+from app.agent.tool_registry import CHAT_TOOLS, RAW_TOOLS, TOOLS, VISIBLE_TOOLS
+from app.server import tools as list_visible_tools
+from app.agent.plan_execute import (
+    AgentPlan,
+    PlannedStep,
+    PlanValidationError,
+    run_plan_execute_agent,
+    should_attempt_plan_execute,
+    validate_plan,
+)
 from app.agent.prompts import SYSTEM_PROMPT
 
 
@@ -88,6 +97,19 @@ def verify_defaults() -> None:
     prune_props = _properties("prune_yolo_by_visualized")
     _assert(prune_props["dry_run"].get("default") is True, "prune dry_run default must stay True")
     _assert(prune_props["confirm_delete"].get("default") is False, "prune confirm_delete default must stay False")
+
+
+def verify_chat_cannot_call_business_tools() -> None:
+    _assert(not CHAT_TOOLS, "generic LangChain chat should not bind callable business tools")
+    for tool_name in BUSINESS_TOOL_NAMES:
+        _assert(tool_name in VISIBLE_TOOLS, f"{tool_name} should remain visible through tool metadata")
+        _assert(tool_name in TOOLS, f"{tool_name} should remain executable through LangGraph tool registry")
+
+    metadata = list_visible_tools()["tools"]
+    visible_names = {item["name"] for item in metadata}
+    for tool_name in BUSINESS_TOOL_NAMES:
+        _assert(tool_name in visible_names, f"{tool_name} should be returned by /api/tools")
+    _assert(all(item.get("callable") is False for item in metadata), "/api/tools should expose metadata only")
 
 
 def verify_error_wrapping() -> None:
@@ -202,6 +224,24 @@ def verify_xml_to_yolo_output_root_guard() -> None:
         _assert(f"output_dir={root}" in result, f"xml output root guard did not normalize labels path: {result}")
         _assert((root / "labels" / "a.txt").is_file(), "xml labels should not be nested under labels/labels")
         _assert(not (root / "labels" / "labels").exists(), "xml conversion must not create labels/labels")
+
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir) / "sample"
+        (root / "images").mkdir(parents=True)
+        (root / "xmls").mkdir(parents=True)
+        Image.new("RGB", (100, 50), color=(255, 255, 255)).save(root / "images" / "a.jpg")
+        (root / "xmls" / "a.xml").write_text(xml_text, encoding="utf-8")
+
+        output = Path(temp_dir) / "sample_yolo"
+        result = TOOLS["convert_xml_to_yolo"].invoke(
+            {
+                "input_dir": str(root),
+                "output_dir": str(output),
+            }
+        )
+        _assert(f"output_dir={output}" in result, f"xml conversion explicit output drifted: {result}")
+        _assert((output / "images" / "a.jpg").is_file(), "explicit xml conversion should copy source images")
+        _assert((output / "labels" / "a.txt").is_file(), "explicit xml conversion should write labels")
 
 
 def verify_incremental_publish_uses_oldyaml_classes() -> None:
@@ -356,6 +396,198 @@ def verify_publish_rejects_nested_input_dirs() -> None:
         _assert("不能同时包含父目录和其子目录" in result, f"nested input dirs error unclear: {result}")
 
 
+def verify_plan_execute_graph_smoke() -> None:
+    xml_text = """<annotation>
+  <size><width>16</width><height>16</height></size>
+  <object>
+    <name>dog</name>
+    <bndbox><xmin>2</xmin><ymin>2</ymin><xmax>8</xmax><ymax>8</ymax></bndbox>
+  </object>
+  <object>
+    <name>pig</name>
+    <bndbox><xmin>8</xmin><ymin>2</ymin><xmax>14</xmax><ymax>8</ymax></bndbox>
+  </object>
+  <object>
+    <name>cat</name>
+    <bndbox><xmin>4</xmin><ymin>8</ymin><xmax>12</xmax><ymax>14</ymax></bndbox>
+  </object>
+</annotation>
+"""
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        input_dir = root / "dataset"
+        detector_root = root / "workspace" / "detector"
+        (input_dir / "images").mkdir(parents=True)
+        (input_dir / "xmls").mkdir(parents=True)
+        detector_root.mkdir(parents=True)
+
+        for name in ("a", "b"):
+            Image.new("RGB", (16, 16), color=(255, 255, 255)).save(input_dir / "images" / f"{name}.jpg")
+            (input_dir / "xmls" / f"{name}.xml").write_text(xml_text, encoding="utf-8")
+
+        request = (
+            f"{input_dir} 转yolo，索引0,1,2都转为0，划分数据集 train val 1:1,"
+            f"之后滑窗裁剪，对裁剪结果进行数据集增强，发布数据集，"
+            f"数据使用裁剪结果与其增强结果，发布到检测器目录{detector_root}"
+        )
+        _assert(should_attempt_plan_execute(request), "plan/execute router should match dataset tool request")
+        plan = AgentPlan(
+            should_execute=True,
+            summary="转换、重映射、划分、滑窗、增强并发布 YOLO 数据集",
+            steps=[
+                PlannedStep(
+                    id="convert",
+                    tool="convert_xml_to_yolo",
+                    args={"input_dir": str(input_dir)},
+                ),
+                PlannedStep(
+                    id="reindex",
+                    tool="reindex_yolo_labels",
+                    args={
+                        "input_dir": "$steps.convert.output_dir",
+                        "source_indices": "0,1,2",
+                        "target_index": "0",
+                    },
+                ),
+                PlannedStep(
+                    id="split",
+                    tool="split_yolo_dataset",
+                    args={
+                        "input_dir": "$steps.reindex.output_dir",
+                        "mode": "train_val",
+                        "split_ratio": "1:1",
+                        "shuffle": False,
+                    },
+                ),
+                PlannedStep(
+                    id="crop",
+                    tool="yolo_sliding_window_crop",
+                    args={"input_dir": "$steps.split.output_dir"},
+                ),
+                PlannedStep(
+                    id="augment",
+                    tool="augment_yolo_dataset",
+                    args={"input_dir": "$steps.crop.output_dir"},
+                ),
+                PlannedStep(
+                    id="publish",
+                    tool="publish_yolo_dataset",
+                    args={
+                        "input_dir": "$steps.crop.output_dir",
+                        "input_dirs": ["$steps.augment.output_dir"],
+                        "detector_path": str(detector_root),
+                    },
+                ),
+            ],
+        )
+
+        result = run_plan_execute_agent(
+            request=request,
+            provider="ollama",
+            model="unused",
+            plan_override=plan,
+        )
+        _assert(result is not None and not result.fallback_reason, f"plan/execute should not fallback: {result}")
+        _assert([call.name for call in result.tool_calls] == [step.tool for step in plan.steps], "tool sequence drifted")
+        _assert(all(call.status == "done" for call in result.tool_calls), f"plan/execute failed: {result}")
+        yaml_paths = list((detector_root / "datasets").glob("*/*.yaml"))
+        _assert(len(yaml_paths) == 1, f"expected one published yaml, got: {yaml_paths}")
+        yaml_text = yaml_paths[0].read_text(encoding="utf-8")
+        _assert("/augment/" not in yaml_text, f"published yaml should not contain nested augment paths: {yaml_text}")
+        _assert("LangGraph plan/execute" in result.text, f"report should mention graph mode: {result.text}")
+
+
+def verify_plan_execute_rejects_dangerous_execute() -> None:
+    plan = AgentPlan(
+        should_execute=True,
+        summary="dangerous train execution",
+        steps=[
+            PlannedStep(
+                id="train",
+                tool="launch_yolo_training",
+                args={"yaml_path": "/tmp/dataset.yaml", "execute": True},
+            )
+        ],
+    )
+    try:
+        validate_plan(plan)
+    except PlanValidationError as error:
+        _assert("execute=true" in str(error), f"unexpected validation error: {error}")
+    else:
+        raise AssertionError("plan/execute must reject execute=true without confirmation flow")
+
+
+def verify_plan_execute_drops_optional_self_reference() -> None:
+    plan = AgentPlan(
+        should_execute=True,
+        summary="crop with invalid optional output reference",
+        steps=[
+            PlannedStep(
+                id="split",
+                tool="split_yolo_dataset",
+                args={"input_dir": "/tmp/dataset", "mode": "train_val"},
+            ),
+            PlannedStep(
+                id="crop",
+                tool="yolo_sliding_window_crop",
+                args={
+                    "input_dir": "$steps.split.output_dir",
+                    "output_dir": "$steps.crop.output_dir",
+                },
+            ),
+        ],
+    )
+    validated = validate_plan(plan)
+    crop_step = validated.steps[1]
+    _assert("output_dir" not in crop_step.args, f"optional self reference should be dropped: {crop_step.args}")
+
+
+def verify_plan_execute_rejects_required_self_reference() -> None:
+    plan = AgentPlan(
+        should_execute=True,
+        summary="crop with invalid required input reference",
+        steps=[
+            PlannedStep(
+                id="crop",
+                tool="yolo_sliding_window_crop",
+                args={"input_dir": "$steps.crop.output_dir"},
+            )
+        ],
+    )
+    try:
+        validate_plan(plan)
+    except PlanValidationError as error:
+        _assert("references current" in str(error), f"unexpected validation error: {error}")
+    else:
+        raise AssertionError("plan/execute must reject self references in required args")
+
+
+def verify_plan_execute_rejects_omitted_requested_tool() -> None:
+    request = "/tmp/dataset 转yolo，划分数据集 train val 9:1，发布到检测器目录/tmp/detector"
+    plan = AgentPlan(
+        should_execute=True,
+        summary="missing publish step",
+        steps=[
+            PlannedStep(
+                id="convert",
+                tool="convert_xml_to_yolo",
+                args={"input_dir": "/tmp/dataset"},
+            ),
+            PlannedStep(
+                id="split",
+                tool="split_yolo_dataset",
+                args={"input_dir": "$steps.convert.output_dir", "split_ratio": "9:1"},
+            ),
+        ],
+    )
+    try:
+        validate_plan(plan, request)
+    except PlanValidationError as error:
+        _assert("publish_yolo_dataset" in str(error), f"unexpected validation error: {error}")
+    else:
+        raise AssertionError("plan/execute must reject plans that omit explicitly requested publish step")
+
+
 def verify_split_smoke() -> None:
     with TemporaryDirectory() as temp_dir:
         root = Path(temp_dir) / "dataset"
@@ -388,6 +620,7 @@ def main() -> None:
     checks = [
         verify_tool_schema_descriptions,
         verify_defaults,
+        verify_chat_cannot_call_business_tools,
         verify_error_wrapping,
         verify_prompt_contracts,
         verify_train_default_resolution,
@@ -396,6 +629,11 @@ def main() -> None:
         verify_augment_default_output_is_sibling,
         verify_publish_ignores_nested_augment_children,
         verify_publish_rejects_nested_input_dirs,
+        verify_plan_execute_graph_smoke,
+        verify_plan_execute_rejects_dangerous_execute,
+        verify_plan_execute_drops_optional_self_reference,
+        verify_plan_execute_rejects_required_self_reference,
+        verify_plan_execute_rejects_omitted_requested_tool,
         verify_split_smoke,
     ]
     for check in checks:

@@ -20,11 +20,12 @@ from app.agent.chat import (
     OLLAMA_MODEL,
     OPENROUTER_MODEL,
     OPENROUTER_API_KEY,
-    TOOLS,
     default_model_selection,
     get_chat_agent,
 )
+from app.agent.plan_execute import run_plan_execute_agent, should_attempt_plan_execute, stream_plan_execute_agent
 from app.agent.streaming import message_key, message_text
+from app.agent.tool_registry import VISIBLE_TOOLS
 from app.services.chat_store import init_chat_store, load_chat_state, save_chat_state
 from app.services.user_settings import (
     load_user_settings,
@@ -153,6 +154,113 @@ def _to_langchain_messages(messages: list[ChatMessageIn]) -> list[BaseMessage]:
         else:
             converted.append(AIMessage(content=message.text))
     return converted
+
+
+def _last_user_text(messages: list[ChatMessageIn]) -> str:
+    for message in reversed(messages):
+        if message.role == "user" and message.text.strip():
+            return message.text.strip()
+    return ""
+
+
+def _run_plan_execute_if_matched(
+    messages: list[ChatMessageIn],
+    provider: str,
+    model: str,
+) -> ChatResponse | None:
+    request_text = _last_user_text(messages)
+    if not should_attempt_plan_execute(request_text):
+        return None
+    result = run_plan_execute_agent(
+        request=request_text,
+        provider=provider,
+        model=model,
+    )
+    if result is None:
+        return None
+    if result.fallback_reason:
+        return ChatResponse(
+            text=(
+                "LangGraph plan/execute 未执行：计划生成或校验失败。\n"
+                f"原因: `{result.fallback_reason}`\n\n"
+                "该请求已识别为工具型任务，因此不会回退到旧 LangChain agent 自动执行。"
+            ),
+            toolCalls=[],
+        )
+    return ChatResponse(
+        text=result.text,
+        toolCalls=[
+            ToolCallOut(
+                id=call.id,
+                name=call.name,
+                args=call.args,
+                status=call.status,
+                result=call.result,
+            )
+            for call in result.tool_calls
+        ],
+    )
+
+
+def _stream_plan_execute_if_matched(
+    messages: list[ChatMessageIn],
+    provider: str,
+    model: str,
+) -> Iterator[str] | None:
+    request_text = _last_user_text(messages)
+    if not should_attempt_plan_execute(request_text):
+        return None
+
+    def _events() -> Iterator[str]:
+        yield _sse("metadata", {"provider": provider, "model": f"{model} + langgraph-plan-execute"})
+        yield _sse("progress", {"message": "已识别为工具型任务，进入 LangGraph plan/execute。"})
+        yield _sse("progress", {"message": "正在规划步骤并校验参数..."})
+
+        try:
+            for event in stream_plan_execute_agent(request=request_text, provider=provider, model=model):
+                event_type = event.get("type")
+                if event_type == "fallback":
+                    yield _sse(
+                        "done",
+                        {
+                            "text": (
+                                "LangGraph plan/execute 未执行：计划生成或校验失败。\n"
+                                f"原因: `{event.get('reason')}`\n\n"
+                                "该请求已识别为工具型任务，因此不会回退到旧 LangChain agent 自动执行。"
+                            )
+                        },
+                    )
+                    return
+                if event_type == "plan":
+                    plan = event["plan"]
+                    lines = ["计划已生成，准备执行:"]
+                    for index, step in enumerate(plan.steps, start=1):
+                        lines.append(f"{index}. {step.id} -> {step.tool}")
+                    yield _sse("progress", {"message": "\n".join(lines)})
+                    continue
+                if event_type == "tool_start":
+                    call = event["call"]
+                    yield _sse("tool_call", {"id": call.id, "name": call.name, "args": call.args, "status": "running"})
+                    continue
+                if event_type == "tool_end":
+                    call = event["call"]
+                    yield _sse(
+                        "tool_result",
+                        {
+                            "id": call.id,
+                            "name": call.name,
+                            "result": call.result,
+                            "status": call.status,
+                        },
+                    )
+                    continue
+                if event_type == "done":
+                    yield _sse("done", {"text": str(event.get("text") or "")})
+                    return
+        except Exception as error:
+            yield _sse("error", {"message": str(error)})
+
+    return _events()
 
 
 def _run_agent(history: list[BaseMessage], provider: str, model: str) -> ChatResponse:
@@ -339,11 +447,13 @@ def tools() -> dict[str, Any]:
             {
                 "name": tool.name,
                 "description": tool.description,
+                "callable": False,
+                "execution": "langgraph_plan_execute_only",
                 "parameters": tool.args_schema.model_json_schema()
                 if tool.args_schema is not None
                 else {"type": "object", "properties": {}},
             }
-            for tool in TOOLS.values()
+            for tool in VISIBLE_TOOLS.values()
         ]
     }
 
@@ -405,6 +515,10 @@ def chat(request: ChatRequest) -> ChatResponse:
         default_provider, default_model = default_model_selection()
         provider = request.provider or default_provider
         model = request.model or default_model
+        plan_execute_response = _run_plan_execute_if_matched(request.messages, provider, model)
+        if plan_execute_response is not None:
+            return plan_execute_response
+
         history = _to_langchain_messages(request.messages)
         if not history:
             raise HTTPException(status_code=400, detail="messages 不能为空。")
@@ -421,6 +535,17 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
         default_provider, default_model = default_model_selection()
         provider = request.provider or default_provider
         model = request.model or default_model
+        plan_execute_events = _stream_plan_execute_if_matched(request.messages, provider, model)
+        if plan_execute_events is not None:
+            return StreamingResponse(
+                plan_execute_events,
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
         history = _to_langchain_messages(request.messages)
         if not history:
             raise HTTPException(status_code=400, detail="messages 不能为空。")

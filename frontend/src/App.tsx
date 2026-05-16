@@ -350,7 +350,11 @@ export default function App() {
 
     updateMessage(sessionId, messageId, (message) => {
       if (event.type === "token") {
-        return { ...message, text: `${message.text ?? ""}${event.text}` };
+        return { ...message, text: `${message.isProgress ? "" : message.text ?? ""}${event.text}`, isProgress: false };
+      }
+
+      if (event.type === "progress") {
+        return { ...message, text: event.message, isProgress: true };
       }
 
       if (event.type === "tool_call") {
@@ -380,11 +384,11 @@ export default function App() {
       }
 
       if (event.type === "error") {
-        return { ...message, text: `${message.text ?? ""}\nError: ${event.message}`.trim() };
+        return { ...message, text: `${message.isProgress ? "" : message.text ?? ""}\nError: ${event.message}`.trim(), isProgress: false };
       }
 
-      if (event.type === "done" && !message.text && event.text) {
-        return { ...message, text: event.text };
+      if (event.type === "done" && event.text && (!message.text || message.isProgress)) {
+        return { ...message, text: event.text, isProgress: false };
       }
 
       return message;

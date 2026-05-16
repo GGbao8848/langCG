@@ -10,6 +10,7 @@ export type UIMessage = {
   id: string;
   role: "user" | "model";
   text?: string;
+  isProgress?: boolean;
   toolCalls?: ToolCallData[];
 };
 
@@ -42,6 +43,7 @@ export type UserSettingsTestResult = {
 
 export type AgentStreamEvent =
   | { type: "metadata"; provider: string; model: string }
+  | { type: "progress"; message: string }
   | { type: "token"; text: string }
   | { type: "tool_call"; id: string; name: string; args?: any; status: "running" }
   | { type: "tool_result"; id: string; name?: string; result?: any; status: "done" | "error" }

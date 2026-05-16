@@ -132,9 +132,12 @@ export const ChatMessage: React.FC<{ msg: UIMessage; loggedInUser?: string | nul
               className={`max-w-full px-4 py-2.5 rounded-2xl whitespace-pre-wrap break-words [overflow-wrap:anywhere] relative shadow-sm ${
                 msg.role === "user"
                   ? "bg-indigo-600 text-white rounded-tr-sm"
-                  : "bg-white border border-slate-200 text-slate-800 rounded-tl-sm"
+                  : msg.isProgress
+                    ? "bg-amber-50 border border-amber-200 text-amber-800 rounded-tl-sm"
+                    : "bg-white border border-slate-200 text-slate-800 rounded-tl-sm"
               }`}
             >
+              {msg.isProgress && <Loader2 className="mr-2 inline h-3.5 w-3.5 animate-spin align-[-2px]" />}
               {msg.text}
             </div>
           )}

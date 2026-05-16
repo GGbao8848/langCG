@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional
 import xml.etree.ElementTree as ET
@@ -141,6 +142,30 @@ def _label_output_path(
     return _source_label_path(xml_path, input_path)
 
 
+def _image_relative_path(image_path: Path, xml_path: Path, input_path: Path) -> Path:
+    try:
+        relative = image_path.relative_to(input_path)
+    except ValueError:
+        return Path("images") / image_path.name
+
+    parts = list(relative.parts)
+    if any(part in IMAGE_DIRNAMES for part in parts[:-1]):
+        return relative
+
+    try:
+        xml_relative = xml_path.relative_to(input_path)
+    except ValueError:
+        return Path("images") / image_path.name
+
+    xml_parts = list(xml_relative.parts)
+    for index, part in enumerate(xml_parts[:-1]):
+        if part.lower() in MARKER_DIRS:
+            xml_parts[index] = "images"
+            xml_parts[-1] = image_path.name
+            return Path(*xml_parts)
+    return Path("images") / image_path.name
+
+
 @tool(parse_docstring=True)
 def convert_xml_to_yolo(
     input_dir: str,
@@ -177,8 +202,10 @@ def convert_xml_to_yolo(
     converted = 0
     skipped = 0
     total_boxes = 0
+    copied_images: set[Path] = set()
 
     for xml_path in xml_paths:
+        image_path = _find_image_for_xml(xml_path)
         try:
             tree = ET.parse(xml_path)
         except ET.ParseError:
@@ -188,7 +215,6 @@ def convert_xml_to_yolo(
         root = tree.getroot()
         size = _xml_size(root)
         if size is None:
-            image_path = _find_image_for_xml(xml_path)
             if image_path is None:
                 skipped += 1
                 continue
@@ -230,6 +256,12 @@ def convert_xml_to_yolo(
         )
         output_label_path.parent.mkdir(parents=True, exist_ok=True)
         output_label_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        if has_explicit_output_dir and image_path is not None:
+            output_image_path = output_path / _image_relative_path(image_path, xml_path, input_path)
+            if output_image_path not in copied_images:
+                output_image_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(image_path, output_image_path)
+                copied_images.add(output_image_path)
         converted += 1
         total_boxes += len(lines)
 
@@ -240,5 +272,6 @@ def convert_xml_to_yolo(
 
     return (
         f"完成。xml_found={len(xml_paths)}，converted={converted}，skipped={skipped}，"
-        f"boxes={total_boxes}，classes={len(class_names)}，output_dir={output_path}"
+        f"boxes={total_boxes}，classes={len(class_names)}，images_copied={len(copied_images)}，"
+        f"output_dir={output_path}"
     )
