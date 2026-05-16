@@ -15,7 +15,7 @@ from langchain.agents.middleware import (
 from langchain.agents.middleware.context_editing import ClearToolUsesEdit
 
 
-DEFAULT_MIDDLEWARE = "model_retry"
+DEFAULT_MIDDLEWARE = "model_retry,model_call_limit,tool_call_limit,context_editing"
 
 
 def _enabled_names() -> list[str]:
@@ -107,13 +107,13 @@ def build_agent_middleware(
                 ContextEditingMiddleware(
                     edits=[
                         ClearToolUsesEdit(
-                            trigger=_env_int("LANGCG_CONTEXT_EDITING_TRIGGER", 24000)
-                            or 24000,
+                            trigger=_env_int("LANGCG_CONTEXT_EDITING_TRIGGER", 6000)
+                            or 6000,
                             clear_at_least=_env_int(
-                                "LANGCG_CONTEXT_EDITING_CLEAR_AT_LEAST", 4000
+                                "LANGCG_CONTEXT_EDITING_CLEAR_AT_LEAST", 2000
                             )
                             or 0,
-                            keep=_env_int("LANGCG_CONTEXT_EDITING_KEEP", 3) or 0,
+                            keep=_env_int("LANGCG_CONTEXT_EDITING_KEEP", 2) or 0,
                             clear_tool_inputs=_env_bool(
                                 "LANGCG_CONTEXT_EDITING_CLEAR_TOOL_INPUTS", False
                             ),

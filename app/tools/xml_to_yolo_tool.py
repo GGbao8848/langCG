@@ -92,7 +92,7 @@ def _normalize_output_root(input_path: Path, output_dir: Optional[str]) -> tuple
     if not output_dir:
         return _default_output_root(input_path), False
 
-    output_path = Path(output_dir).expanduser().resolve()
+    output_path = Path(output_dir).expanduser().absolute()
     if _is_standard_xml_dataset_root(input_path):
         if output_path == input_path / "labels":
             return input_path, True
@@ -161,7 +161,7 @@ def convert_xml_to_yolo(
         output_dir: 输出根目录；为空时在 XML 标注目录同级生成 labels 目录。
         classes: 类别名称列表，使用逗号分隔；为空时按扫描到的类别名称动态追加。
     """
-    input_path = Path(input_dir).expanduser().resolve()
+    input_path = Path(input_dir).expanduser().absolute()
     if not input_path.is_dir():
         raise ValueError(f"input_dir不存在: {input_path}")
 

@@ -19,6 +19,7 @@ from langchain_ollama import ChatOllama
 from app.agent.middleware import build_agent_middleware
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.streaming import message_key, message_text, print_tool_calls, print_tool_result
+from app.agent.tool_results import format_tool_result
 from app.tools.annotate_visualize_tool import annotate_visualize
 from app.tools.publish_yolo_dataset_tool import publish_yolo_dataset
 from app.tools.yolo_augment_tool import augment_yolo_dataset
@@ -73,11 +74,11 @@ def _fetch_ollama_models() -> list[str]:
 
 
 def _handle_tool_error(error: Exception) -> str:
-    return f"tool执行失败: {error}"
+    return f"tool执行失败: {format_tool_result(str(error), success=False)}"
 
 
 def _handle_tool_validation_error(error: Exception) -> str:
-    return f"tool执行失败: {error}"
+    return f"tool执行失败: {format_tool_result(str(error), success=False)}"
 
 
 def _make_safe_tool(tool: BaseTool) -> StructuredTool:
@@ -86,7 +87,7 @@ def _make_safe_tool(tool: BaseTool) -> StructuredTool:
             result = tool.invoke(kwargs)
         except Exception as error:
             return _handle_tool_error(error)
-        return str(result)
+        return format_tool_result(result, success=True)
 
     return StructuredTool.from_function(
         func=_safe_func,

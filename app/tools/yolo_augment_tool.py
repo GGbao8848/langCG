@@ -18,6 +18,16 @@ _DEFAULT_FACTORS: dict[str, float] = {
     "contrast_down": 0.6,
 }
 
+GENERATED_AUGMENT_DIR_NAMES = {"augment"}
+
+
+def _is_under_generated_augment_dir(input_dir: Path, path: Path) -> bool:
+    try:
+        relative_parts = path.relative_to(input_dir).parts
+    except ValueError:
+        return False
+    return any(part in GENERATED_AUGMENT_DIR_NAMES or part.endswith("_augment") for part in relative_parts[:-1])
+
 
 def _discover_dataset_units(input_dir: Path) -> list[tuple[Path, Path, Path]]:
     dataset_units: list[tuple[Path, Path, Path]] = []
@@ -30,6 +40,8 @@ def _discover_dataset_units(input_dir: Path) -> list[tuple[Path, Path, Path]]:
         seen_images_dirs.add(direct_images_dir.resolve())
 
     for images_dir in sorted(p for p in input_dir.rglob("images") if p.is_dir()):
+        if _is_under_generated_augment_dir(input_dir, images_dir):
+            continue
         resolved = images_dir.resolve()
         if resolved in seen_images_dirs:
             continue
@@ -162,7 +174,7 @@ def augment_yolo_dataset(
 
     Args:
         input_dir: 输入 YOLO 数据集根目录，可递归查找成对的 images/labels 目录。
-        output_dir: 输出目录，默认写入 input_dir/augment。
+        output_dir: 输出目录，默认写入 input_dir 同级的 <input_dir_name>_augment，避免被后续递归发布重复收集。
         horizontal_flip: 是否生成水平翻转样本，默认 True。
         vertical_flip: 是否生成垂直翻转样本，默认 True。
         brightness_up: 是否生成亮度增强样本，默认 True。
@@ -174,14 +186,14 @@ def augment_yolo_dataset(
         rotate_left90: rotate_left_90 的兼容别名。
         rotate_right90: rotate_right_90 的兼容别名。
     """
-    input_path = Path(input_dir).expanduser().resolve()
+    input_path = Path(input_dir).expanduser().absolute()
     if not input_path.is_dir():
         raise ValueError(f"input_dir不存在: {input_path}")
 
     if output_dir:
-        output_path = Path(output_dir).expanduser().resolve()
+        output_path = Path(output_dir).expanduser().absolute()
     else:
-        output_path = input_path / "augment"
+        output_path = input_path.with_name(f"{input_path.name}_augment")
 
     if output_path == input_path:
         raise ValueError("output_dir不能与input_dir相同")

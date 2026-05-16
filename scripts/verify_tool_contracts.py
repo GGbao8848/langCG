@@ -5,6 +5,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from PIL import Image
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -258,6 +260,102 @@ def verify_incremental_publish_uses_oldyaml_classes() -> None:
         _assert(classes_text == "old_zero\nold_one\n", f"classes.txt should come from oldyaml: {classes_text!r}")
 
 
+def verify_augment_default_output_is_sibling() -> None:
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir) / "crop_dataset"
+        (root / "train" / "images").mkdir(parents=True)
+        (root / "train" / "labels").mkdir(parents=True)
+        Image.new("RGB", (16, 16), color=(255, 255, 255)).save(root / "train" / "images" / "a.jpg")
+        (root / "train" / "labels" / "a.txt").write_text(
+            "0 0.5 0.5 0.5 0.5\n",
+            encoding="utf-8",
+        )
+
+        result = TOOLS["augment_yolo_dataset"].invoke(
+            {
+                "input_dir": str(root),
+                "horizontal_flip": True,
+                "vertical_flip": False,
+                "brightness_up": False,
+                "brightness_down": False,
+                "contrast_up": False,
+                "contrast_down": False,
+            }
+        )
+        sibling_output = root.parent / "crop_dataset_augment"
+        nested_output = root / "augment"
+        _assert(f"output_dir={sibling_output}" in result, f"augment output should be sibling: {result}")
+        _assert((sibling_output / "train" / "images" / "a_hflip.jpg").is_file(), "sibling augment image missing")
+        _assert(not nested_output.exists(), "augment must not default to input_dir/augment")
+
+
+def verify_publish_ignores_nested_augment_children() -> None:
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        detector_root = root / "workspace" / "detector"
+        detector_root.mkdir(parents=True)
+        input_dir = root / "crop_dataset"
+        (input_dir / "train" / "images").mkdir(parents=True)
+        (input_dir / "train" / "labels").mkdir(parents=True)
+        (input_dir / "augment" / "train" / "images").mkdir(parents=True)
+        (input_dir / "augment" / "train" / "labels").mkdir(parents=True)
+        (input_dir / "train" / "images" / "a.jpg").write_bytes(b"")
+        (input_dir / "train" / "labels" / "a.txt").write_text("0 0.5 0.5 0.1 0.1\n", encoding="utf-8")
+        (input_dir / "augment" / "train" / "images" / "a_hflip.jpg").write_bytes(b"")
+        (input_dir / "augment" / "train" / "labels" / "a_hflip.txt").write_text(
+            "0 0.5 0.5 0.1 0.1\n",
+            encoding="utf-8",
+        )
+        (input_dir / "classes.txt").write_text("target\n", encoding="utf-8")
+
+        dataset_version = "detector_20260516_1200"
+        result = TOOLS["publish_yolo_dataset"].invoke(
+            {
+                "input_dir": str(input_dir),
+                "detector_path": str(detector_root),
+                "dataset_version": dataset_version,
+            }
+        )
+        output_dir = detector_root / "datasets" / dataset_version
+        yaml_text = (output_dir / f"{dataset_version}.yaml").read_text(encoding="utf-8")
+
+        _assert("mode=local" in result, f"unexpected publish result: {result}")
+        _assert("/augment/" not in yaml_text, f"nested augment path leaked into yaml: {yaml_text}")
+        _assert(not (output_dir / "augment").exists(), "nested input augment dir should not be copied")
+
+
+def verify_publish_rejects_nested_input_dirs() -> None:
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        detector_root = root / "workspace" / "detector"
+        detector_root.mkdir(parents=True)
+        input_dir = root / "crop_dataset"
+        nested_augment = input_dir / "augment"
+        (input_dir / "train" / "images").mkdir(parents=True)
+        (input_dir / "train" / "labels").mkdir(parents=True)
+        (nested_augment / "train" / "images").mkdir(parents=True)
+        (nested_augment / "train" / "labels").mkdir(parents=True)
+        (input_dir / "train" / "images" / "a.jpg").write_bytes(b"")
+        (input_dir / "train" / "labels" / "a.txt").write_text("0 0.5 0.5 0.1 0.1\n", encoding="utf-8")
+        (nested_augment / "train" / "images" / "a_hflip.jpg").write_bytes(b"")
+        (nested_augment / "train" / "labels" / "a_hflip.txt").write_text(
+            "0 0.5 0.5 0.1 0.1\n",
+            encoding="utf-8",
+        )
+        (input_dir / "classes.txt").write_text("target\n", encoding="utf-8")
+
+        result = TOOLS["publish_yolo_dataset"].invoke(
+            {
+                "input_dir": str(input_dir),
+                "input_dirs": [str(nested_augment)],
+                "detector_path": str(detector_root),
+                "dataset_version": "detector_20260516_1300",
+            }
+        )
+        _assert(result.startswith("tool执行失败"), f"nested input dirs should fail: {result}")
+        _assert("不能同时包含父目录和其子目录" in result, f"nested input dirs error unclear: {result}")
+
+
 def verify_split_smoke() -> None:
     with TemporaryDirectory() as temp_dir:
         root = Path(temp_dir) / "dataset"
@@ -295,6 +393,9 @@ def main() -> None:
         verify_train_default_resolution,
         verify_xml_to_yolo_output_root_guard,
         verify_incremental_publish_uses_oldyaml_classes,
+        verify_augment_default_output_is_sibling,
+        verify_publish_ignores_nested_augment_children,
+        verify_publish_rejects_nested_input_dirs,
         verify_split_smoke,
     ]
     for check in checks:

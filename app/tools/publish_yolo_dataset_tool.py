@@ -19,6 +19,23 @@ from app.services.user_settings import load_user_settings
 from app.tools.dataset_clean_tool import IMAGE_SUFFIXES
 
 _DEFAULT_SPLITS = ["train", "val", "test"]
+_GENERATED_CHILD_DIR_NAMES = {"augment"}
+
+
+def _is_generated_child_dir_name(name: str) -> bool:
+    return name in _GENERATED_CHILD_DIR_NAMES or name.endswith("_augment")
+
+
+def _is_under_generated_child_dir(dataset_root: Path, path: Path) -> bool:
+    try:
+        relative_parts = path.relative_to(dataset_root).parts
+    except ValueError:
+        return False
+    return any(_is_generated_child_dir_name(part) for part in relative_parts[:-1])
+
+
+def _copytree_ignore_generated_dirs(_directory: str, names: list[str]) -> set[str]:
+    return {name for name in names if _is_generated_child_dir_name(name)}
 
 
 class PublishYoloDatasetArgs(BaseModel):
@@ -230,14 +247,28 @@ def _normalize_input_dirs(input_dir: str, input_dirs: list[str] | None, allow_em
     if len(paths) == 1:
         only = paths[0]
         only_text = str(only)
-        if only_text.endswith("_aug"):
-            base_candidate = Path(only_text[: -len("_aug")]).resolve()
+        if only_text.endswith("_augment"):
+            base_candidate = Path(only_text[: -len("_augment")]).resolve()
             if base_candidate.is_dir() and base_candidate not in seen:
                 paths.insert(0, base_candidate)
         else:
-            aug_candidate = Path(f"{only_text}_aug").resolve()
+            aug_candidate = Path(f"{only_text}_augment").resolve()
             if aug_candidate.is_dir() and aug_candidate not in seen:
                 paths.append(aug_candidate)
+
+    for parent in paths:
+        for child in paths:
+            if parent == child:
+                continue
+            try:
+                child.relative_to(parent)
+            except ValueError:
+                continue
+            raise ValueError(
+                "input_dir/input_dirs不能同时包含父目录和其子目录，"
+                f"否则会重复发布数据: parent={parent}, child={child}。"
+                "增强结果请放在输入目录同级的 <input>_augment 目录。"
+            )
 
     if not paths and not allow_empty:
         raise ValueError("input_dir或input_dirs至少要提供一个数据集路径")
@@ -347,6 +378,8 @@ def _collect_split_dirs(dataset_root: Path) -> dict[str, list[Path]]:
     seen: set[Path] = set()
 
     def add_split_dir(split: str, images_dir: Path) -> None:
+        if _is_under_generated_child_dir(dataset_root, images_dir):
+            return
         resolved = images_dir.resolve()
         if resolved in seen:
             return
@@ -363,6 +396,8 @@ def _collect_split_dirs(dataset_root: Path) -> dict[str, list[Path]]:
             add_split_dir(split, images_dir)
 
     for images_dir in sorted(p for p in dataset_root.rglob("images") if p.is_dir()):
+        if _is_under_generated_child_dir(dataset_root, images_dir):
+            continue
         parent_name = images_dir.parent.name.lower()
         if parent_name in _DEFAULT_SPLITS:
             add_split_dir(parent_name, images_dir)
@@ -476,12 +511,14 @@ def _stage_merged_dataset(
                 idx += 1
             used_names.add(candidate)
             target_root = dataset_dir / candidate
-            shutil.copytree(source_root, target_root)
+            shutil.copytree(source_root, target_root, ignore=_copytree_ignore_generated_dirs)
         else:
             for child in source_root.iterdir():
+                if _is_generated_child_dir_name(child.name):
+                    continue
                 destination = target_root / child.name
                 if child.is_dir():
-                    shutil.copytree(child, destination)
+                    shutil.copytree(child, destination, ignore=_copytree_ignore_generated_dirs)
                 else:
                     shutil.copy2(child, destination)
 
