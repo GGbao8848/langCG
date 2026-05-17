@@ -12,13 +12,19 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.agent.tool_registry import CHAT_TOOLS, RAW_TOOLS, TOOLS, VISIBLE_TOOLS
-from app.server import tools as list_visible_tools
+from app.server import (
+    ChatMessageIn,
+    _patch_pending_plan,
+    _plan_execute_request_text,
+    tools as list_visible_tools,
+)
 from app.agent.plan_execute import (
     AgentPlan,
     PlannedStep,
     PlanValidationError,
     run_plan_execute_agent,
     should_attempt_plan_execute,
+    stream_plan_execute_agent,
     validate_plan,
 )
 from app.agent.prompts import SYSTEM_PROMPT
@@ -588,6 +594,126 @@ def verify_plan_execute_rejects_omitted_requested_tool() -> None:
         raise AssertionError("plan/execute must reject plans that omit explicitly requested publish step")
 
 
+def verify_plan_execute_clarifies_missing_publish_context() -> None:
+    request = "/tmp/dataset 转yolo，划分数据集 train val 9:1，发布数据集"
+    plan = AgentPlan(
+        should_execute=True,
+        summary="missing publish target",
+        steps=[
+            PlannedStep(
+                id="convert",
+                tool="convert_xml_to_yolo",
+                args={"input_dir": "/tmp/dataset"},
+            ),
+            PlannedStep(
+                id="split",
+                tool="split_yolo_dataset",
+                args={"input_dir": "$steps.convert.output_dir", "split_ratio": "9:1"},
+            ),
+            PlannedStep(
+                id="publish",
+                tool="publish_yolo_dataset",
+                args={"input_dir": "$steps.split.output_dir"},
+            ),
+        ],
+    )
+    result = run_plan_execute_agent(
+        request=request,
+        provider="ollama",
+        model="unused",
+        plan_override=plan,
+    )
+    _assert(result is not None, "plan/execute should return a clarification result")
+    _assert(result.needs_clarification, f"missing publish context should require clarification: {result}")
+    _assert(not result.tool_calls, "clarification should stop before executing tools")
+    _assert("detector_path" in result.text and "oldyaml" in result.text, f"clarification text unclear: {result.text}")
+
+    events = list(
+        stream_plan_execute_agent(
+            request=request,
+            provider="ollama",
+            model="unused",
+            plan_override=plan,
+        )
+    )
+    _assert([event["type"] for event in events] == ["plan", "clarification"], f"unexpected stream events: {events}")
+
+
+def verify_plan_execute_continues_after_clarification() -> None:
+    original_request = "/tmp/dataset 转yolo，划分数据集 train val 9:1，发布数据集"
+    publish_path = "/tmp/workspace/detector"
+    messages = [
+        ChatMessageIn(role="user", text=original_request),
+        ChatMessageIn(
+            role="assistant",
+            text=(
+                "执行前需要补充信息，已暂停工具执行。\n\n"
+                "请补充:\n- 请提供 detector_path（检测器目录）或 oldyaml（历史 yaml 路径）。"
+            ),
+        ),
+        ChatMessageIn(role="user", text=publish_path),
+    ]
+    request_text = _plan_execute_request_text(messages)
+    _assert(request_text.endswith(f"发布到{publish_path}"), f"clarification follow-up was not merged: {request_text}")
+    _assert(should_attempt_plan_execute(request_text), f"merged request should route to plan/execute: {request_text}")
+
+    plan = AgentPlan(
+        should_execute=True,
+        summary="pending publish target",
+        steps=[
+            PlannedStep(id="convert", tool="convert_xml_to_yolo", args={"input_dir": "/tmp/dataset"}),
+            PlannedStep(id="publish", tool="publish_yolo_dataset", args={"input_dir": "$steps.convert.output_dir"}),
+        ],
+    )
+    patched = _patch_pending_plan(
+        {"request": original_request, "plan": plan.model_dump(mode="json")},
+        publish_path,
+    )
+    _assert(patched is not None, "pending plan should be patchable from a path-only reply")
+    patched_request, patched_plan = patched
+    _assert(patched_request.endswith(f"发布到{publish_path}"), f"patched request unclear: {patched_request}")
+    publish_step = next(step for step in patched_plan.steps if step.tool == "publish_yolo_dataset")
+    _assert(
+        publish_step.args.get("detector_path") == publish_path,
+        f"pending plan did not patch detector_path: {publish_step.args}",
+    )
+
+    structured_patched = _patch_pending_plan(
+        {
+            "request": original_request,
+            "plan": plan.model_dump(mode="json"),
+            "missing_fields": [
+                {
+                    "step_id": "publish",
+                    "tool": "publish_yolo_dataset",
+                    "field": "detector_path",
+                    "field_type": "absolute_directory_path",
+                    "description": "检测器目录路径",
+                    "example": "/tmp/workspace/detector",
+                    "required_one_of": ["detector_path", "oldyaml"],
+                },
+                {
+                    "step_id": "publish",
+                    "tool": "publish_yolo_dataset",
+                    "field": "oldyaml",
+                    "field_type": "yaml_path",
+                    "description": "历史 yaml 路径",
+                    "example": "/tmp/workspace/detector/datasets/v1/v1.yaml",
+                    "required_one_of": ["detector_path", "oldyaml"],
+                },
+            ],
+        },
+        f"使用{publish_path}",
+    )
+    _assert(structured_patched is not None, "structured pending plan should parse path from natural reply")
+    _, structured_plan = structured_patched
+    structured_publish = next(step for step in structured_plan.steps if step.tool == "publish_yolo_dataset")
+    _assert(
+        structured_publish.args.get("detector_path") == publish_path,
+        f"structured parser should extract clean detector_path: {structured_publish.args}",
+    )
+
+
 def verify_split_smoke() -> None:
     with TemporaryDirectory() as temp_dir:
         root = Path(temp_dir) / "dataset"
@@ -634,6 +760,8 @@ def main() -> None:
         verify_plan_execute_drops_optional_self_reference,
         verify_plan_execute_rejects_required_self_reference,
         verify_plan_execute_rejects_omitted_requested_tool,
+        verify_plan_execute_clarifies_missing_publish_context,
+        verify_plan_execute_continues_after_clarification,
         verify_split_smoke,
     ]
     for check in checks:
