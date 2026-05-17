@@ -406,6 +406,7 @@ export default function App() {
       return {
         ...message,
         text: message.text ? `${message.text}\n\n${suffix}` : suffix,
+        isProgress: false,
         toolCalls,
       };
     });
