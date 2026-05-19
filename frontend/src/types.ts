@@ -27,6 +27,20 @@ export type ChatModelOption = {
   label: string;
 };
 
+export type LLMProvider = "openrouter" | "ollama";
+
+export type LLMProviderSettings = {
+  model: string;
+  api_key: string;
+  base_url: string;
+};
+
+export type LLMSettings = {
+  active_provider: LLMProvider;
+  providers: Record<LLMProvider, LLMProviderSettings>;
+  model_options: Record<LLMProvider, string[]>;
+};
+
 export type UserSettings = {
   remote_sftp_host: string;
   remote_sftp_username: string;

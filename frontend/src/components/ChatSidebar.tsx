@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { MessageSquare, Plus, MoreHorizontal, Pencil, Trash2, X, Check, Settings2, ChevronDown, ChevronRight } from "lucide-react";
-import { ChatSession, UserSettings } from "../types";
+import { MessageSquare, Plus, MoreHorizontal, Pencil, Trash2, X, Check, ChevronDown, ChevronRight } from "lucide-react";
+import { ChatSession, LLMProvider, LLMSettings, UserSettings } from "../types";
 
 interface ChatSidebarProps {
   isOpen: boolean;
@@ -10,8 +10,17 @@ interface ChatSidebarProps {
   onNewSession: () => void;
   onDeleteSession: (id: string) => void;
   onRenameSession: (id: string, newName: string) => void;
-  onLLMSettingsClick?: () => void;
   activeModelLabel?: string;
+  llmSettings: LLMSettings;
+  isLLMSettingsComplete: boolean;
+  isSavingLLMSettings: boolean;
+  isTestingLLMSettings: boolean;
+  isLLMSettingsTestPassed: boolean;
+  isLLMSettingsSaved: boolean;
+  llmSettingsStatus: string;
+  onLLMSettingsChange: (settings: LLMSettings) => void;
+  onTestLLMSettings: () => void;
+  onSaveLLMSettings: () => void;
   userSettings: UserSettings;
   isUserSettingsComplete: boolean;
   isSavingRemoteUserSettings: boolean;
@@ -39,8 +48,17 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   onNewSession,
   onDeleteSession,
   onRenameSession,
-  onLLMSettingsClick,
   activeModelLabel,
+  llmSettings,
+  isLLMSettingsComplete,
+  isSavingLLMSettings,
+  isTestingLLMSettings,
+  isLLMSettingsTestPassed,
+  isLLMSettingsSaved,
+  llmSettingsStatus,
+  onLLMSettingsChange,
+  onTestLLMSettings,
+  onSaveLLMSettings,
   userSettings,
   isUserSettingsComplete,
   isSavingRemoteUserSettings,
@@ -62,6 +80,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [menuPos, setMenuPos] = useState<{ id: string, top: number, left: number } | null>(null);
+  const [isLLMSettingsCollapsed, setIsLLMSettingsCollapsed] = useState(true);
   const [isUserSettingsCollapsed, setIsUserSettingsCollapsed] = useState(true);
   const [isYoloEnvironmentCollapsed, setIsYoloEnvironmentCollapsed] = useState(true);
 
@@ -79,6 +98,11 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   };
 
   const sortedSessions = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt);
+  const llmSettingsCardClass = isLLMSettingsComplete
+    ? isLLMSettingsTestPassed
+      ? "border-emerald-200 bg-emerald-50/60"
+      : "border-red-300 bg-red-50/80"
+    : "border-red-300 bg-red-50/80";
   const userSettingsCardClass = isUserSettingsComplete
     ? isUserSettingsTestPassed
       ? "border-emerald-200 bg-emerald-50/60"
@@ -109,6 +133,35 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
         : "已测试，待保存"
       : "待测试"
     : "未配置";
+  const llmSettingsSubtitle = isLLMSettingsComplete
+    ? isLLMSettingsTestPassed
+      ? isLLMSettingsSaved
+        ? "已测试并保存"
+        : "已测试，待保存"
+      : "待测试"
+    : "模型配置未填写完整";
+  const activeLLMProviderSettings = llmSettings.providers[llmSettings.active_provider];
+  const activeLLMModelOptions = llmSettings.model_options[llmSettings.active_provider] ?? [];
+  const llmProviderLabel = llmSettings.active_provider === "openrouter" ? "OpenRouter" : "Ollama";
+  const llmBaseUrlLabel = llmSettings.active_provider === "openrouter" ? "OpenRouter Base URL" : "Ollama URL";
+  const updateActiveLLMProviderSettings = (updates: Partial<typeof activeLLMProviderSettings>) => {
+    onLLMSettingsChange({
+      ...llmSettings,
+      providers: {
+        ...llmSettings.providers,
+        [llmSettings.active_provider]: {
+          ...activeLLMProviderSettings,
+          ...updates,
+        },
+      },
+    });
+  };
+
+  useEffect(() => {
+    if (isLLMSettingsSaved && isLLMSettingsTestPassed) {
+      setIsLLMSettingsCollapsed(true);
+    }
+  }, [isLLMSettingsSaved, isLLMSettingsTestPassed]);
 
   useEffect(() => {
     if (isUserSettingsSaved && isUserSettingsTestPassed) {
@@ -236,18 +289,109 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
         </div>
         
         <div className="p-3 border-t border-slate-200 shrink-0">
-          <button
-            onClick={onLLMSettingsClick}
-            className="w-full flex items-center p-2 rounded-xl transition-all duration-200 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 bg-white border border-slate-200 hover:border-indigo-200 hover:bg-indigo-50/50 text-slate-700"
-          >
-            <div className="shrink-0 flex items-center justify-center w-8 h-8 rounded-full mr-2.5 bg-slate-100 text-slate-500">
-              <Settings2 className="w-4 h-4" />
+          <div className={`rounded-2xl border p-3 shadow-sm transition-colors ${llmSettingsCardClass}`}>
+            <div className={`flex items-center justify-between ${isLLMSettingsCollapsed ? "" : "mb-2"}`}>
+              <button
+                type="button"
+                onClick={() => setIsLLMSettingsCollapsed((collapsed) => !collapsed)}
+                className="flex min-w-0 flex-1 items-center text-left focus:outline-none"
+              >
+                <span className="mr-1.5 shrink-0 text-slate-500">
+                  {isLLMSettingsCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                </span>
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-slate-800">当前模型</div>
+                  <div className={`truncate text-[10px] ${isLLMSettingsTestPassed ? "text-emerald-700" : "text-red-600"}`}>
+                    {isLLMSettingsCollapsed ? activeModelLabel ?? "OpenRouter / Ollama" : llmSettingsSubtitle}
+                  </div>
+                </div>
+              </button>
+              {!isLLMSettingsCollapsed && (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={onTestLLMSettings}
+                    disabled={!isLLMSettingsComplete || isTestingLLMSettings || isSavingLLMSettings}
+                    className="rounded-lg bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-indigo-700 disabled:bg-slate-300 disabled:text-slate-500"
+                  >
+                    {isTestingLLMSettings ? "测试中" : "测试"}
+                  </button>
+                  <button
+                    onClick={onSaveLLMSettings}
+                    disabled={!isLLMSettingsTestPassed || isSavingLLMSettings || isTestingLLMSettings}
+                    className="rounded-lg bg-slate-900 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-slate-700 disabled:bg-slate-300 disabled:text-slate-500"
+                  >
+                    {isSavingLLMSettings ? "保存中" : "保存"}
+                  </button>
+                </div>
+              )}
             </div>
-            <div className="flex-1 min-w-0 text-left flex flex-col">
-              <span className="text-sm font-medium truncate">当前模型</span>
-              <span className="text-[10px] truncate text-slate-400">{activeModelLabel ?? "OpenRouter / Ollama"}</span>
-            </div>
-          </button>
+
+            {!isLLMSettingsCollapsed && (
+              <>
+                <div className={`text-[10px] ${isLLMSettingsComplete ? "text-slate-500" : "text-red-500"}`}>
+                  {llmSettingsSubtitle}
+                </div>
+                <div className="mt-2 space-y-2">
+                  <label className="block text-[11px] font-medium text-slate-500">
+                    Provider
+                    <select
+                      value={llmSettings.active_provider}
+                      onChange={(event) => {
+                        const provider = event.target.value as LLMProvider;
+                        onLLMSettingsChange({
+                          ...llmSettings,
+                          active_provider: provider,
+                        });
+                      }}
+                      className={userSettingsInputClass(true)}
+                    >
+                      <option value="ollama">Ollama</option>
+                      <option value="openrouter">OpenRouter</option>
+                    </select>
+                  </label>
+                  <label className="block text-[11px] font-medium text-slate-500">
+                    Model
+                    <select
+                      value={activeLLMProviderSettings.model}
+                      onChange={(event) => updateActiveLLMProviderSettings({ model: event.target.value })}
+                      className={userSettingsInputClass(Boolean(activeLLMProviderSettings.model.trim()))}
+                    >
+                      {activeLLMModelOptions.map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block text-[11px] font-medium text-slate-500">
+                    {llmBaseUrlLabel}
+                    <input
+                      value={activeLLMProviderSettings.base_url}
+                      placeholder={llmSettings.active_provider === "openrouter" ? "https://openrouter.ai/api/v1" : "http://127.0.0.1:11434"}
+                      onChange={(event) => updateActiveLLMProviderSettings({ base_url: event.target.value })}
+                      className={`${userSettingsInputClass(Boolean(activeLLMProviderSettings.base_url.trim()))} placeholder:text-slate-300`}
+                    />
+                  </label>
+                  {llmSettings.active_provider === "openrouter" && (
+                    <label className="block text-[11px] font-medium text-slate-500">
+                      API Key
+                      <input
+                        type="password"
+                        value={activeLLMProviderSettings.api_key}
+                        placeholder="sk-or-..."
+                        onChange={(event) => updateActiveLLMProviderSettings({ api_key: event.target.value })}
+                        className={`${userSettingsInputClass(Boolean(activeLLMProviderSettings.api_key.trim()))} placeholder:text-slate-300`}
+                      />
+                    </label>
+                  )}
+                </div>
+                <div className={`mt-2 text-[10px] ${isLLMSettingsTestPassed ? "text-emerald-700" : "text-red-600"}`}>
+                  {llmSettingsStatus ||
+                    (isLLMSettingsComplete ? "请先点击测试，联通正常后才能保存" : `${llmProviderLabel} 配置未填写完整`)}
+                </div>
+              </>
+            )}
+          </div>
 
           <div className={`mt-3 rounded-2xl border p-3 shadow-sm transition-colors ${userSettingsCardClass}`}>
             <div className={`flex items-center justify-between ${isUserSettingsCollapsed ? "" : "mb-2"}`}>

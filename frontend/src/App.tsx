@@ -3,9 +3,19 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChatMessage } from "./components/ChatMessage";
 import { ChatSidebar } from "./components/ChatSidebar";
 import { ToolSidebar } from "./components/ToolSidebar";
-import { fetchModels, fetchTools, fetchUserSettings, saveUserSettings, streamChat, testUserSettings, testYoloEnvironment } from "./services/agentApi";
+import {
+  fetchLLMSettings,
+  fetchTools,
+  fetchUserSettings,
+  saveLLMSettings,
+  saveUserSettings,
+  streamChat,
+  testLLMSettings,
+  testUserSettings,
+  testYoloEnvironment,
+} from "./services/agentApi";
 import { loadPersistedChatState, savePersistedChatState, type PersistedChatState } from "./services/chatStorage";
-import { AgentStreamEvent, ChatModelOption, ChatSession, ToolCallData, UIMessage, UserSettings } from "./types";
+import { AgentStreamEvent, ChatSession, LLMProvider, LLMSettings, ToolCallData, UIMessage, UserSettings } from "./types";
 
 const newSession = (): ChatSession => ({
   id: crypto.randomUUID(),
@@ -14,14 +24,32 @@ const newSession = (): ChatSession => ({
   messages: [],
 });
 
-const selectionKey = (provider: string, model: string) => `${provider}::${model}`;
-
 const defaultUserSettings: UserSettings = {
   remote_sftp_host: "172.31.1.42",
   remote_sftp_username: "",
   remote_sftp_private_key_path: "/home/qzq/.ssh/id_ed25519",
   remote_sftp_port: 22,
   local_yolo_train_venv_path: "",
+};
+
+const defaultLLMSettings: LLMSettings = {
+  active_provider: "ollama",
+  providers: {
+    ollama: {
+      model: "gemma4:e4b",
+      api_key: "",
+      base_url: "http://127.0.0.1:11434",
+    },
+    openrouter: {
+      model: "openrouter/free",
+      api_key: "",
+      base_url: "https://openrouter.ai/api/v1",
+    },
+  },
+  model_options: {
+    ollama: ["gemma4:e4b", "qwen3.5:9b"],
+    openrouter: ["openrouter/free"],
+  },
 };
 
 function normalizeSessionsForStorage(sessions: ChatSession[]): ChatSession[] {
@@ -51,14 +79,6 @@ function normalizeSessionsForStorage(sessions: ChatSession[]): ChatSession[] {
   return normalized.length > 0 ? normalized : [newSession()];
 }
 
-function writeStorage(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value);
-  } catch (error) {
-    console.warn(`Failed to persist ${key}`, error);
-  }
-}
-
 function remoteUserSettingsKey(settings: UserSettings) {
   return JSON.stringify({
     remote_sftp_host: settings.remote_sftp_host.trim(),
@@ -81,6 +101,34 @@ function yoloEnvironmentKey(settings: UserSettings) {
   return settings.local_yolo_train_venv_path.trim();
 }
 
+function llmSettingsKey(settings: LLMSettings) {
+  const activeSettings = activeLLMProviderSettings(settings);
+  return JSON.stringify({
+    active_provider: settings.active_provider,
+    model: activeSettings.model.trim(),
+    api_key: settings.active_provider === "openrouter" ? activeSettings.api_key.trim() : "",
+    base_url: activeSettings.base_url.trim(),
+  });
+}
+
+function isCompleteLLMSettings(settings: LLMSettings) {
+  const activeSettings = activeLLMProviderSettings(settings);
+  return Boolean(
+    settings.active_provider &&
+      activeSettings.model.trim() &&
+      activeSettings.base_url.trim() &&
+      (settings.active_provider !== "openrouter" || activeSettings.api_key.trim()),
+  );
+}
+
+function providerLabel(provider: LLMProvider) {
+  return provider === "openrouter" ? "OpenRouter" : "Ollama";
+}
+
+function activeLLMProviderSettings(settings: LLMSettings) {
+  return settings.providers[settings.active_provider] ?? defaultLLMSettings.providers[settings.active_provider];
+}
+
 export default function App() {
   const [sessions, setSessions] = useState<ChatSession[]>(() => [newSession()]);
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => "");
@@ -91,18 +139,22 @@ export default function App() {
   const [isToolSidebarOpen, setIsToolSidebarOpen] = useState(false);
   const [toolSearchQuery, setToolSearchQuery] = useState("");
   const [tools, setTools] = useState<any[]>([]);
-  const [modelOptions, setModelOptions] = useState<ChatModelOption[]>([]);
-  const [activeProvider, setActiveProvider] = useState("openrouter");
-  const [activeModel, setActiveModel] = useState("openrouter/free");
+  const [llmSettings, setLLMSettings] = useState<LLMSettings>(defaultLLMSettings);
+  const [savedLLMSettings, setSavedLLMSettings] = useState<LLMSettings>(defaultLLMSettings);
   const [userSettings, setUserSettings] = useState<UserSettings>(defaultUserSettings);
+  const [isSavingLLMSettings, setIsSavingLLMSettings] = useState(false);
   const [isSavingRemoteUserSettings, setIsSavingRemoteUserSettings] = useState(false);
   const [isSavingYoloEnvironment, setIsSavingYoloEnvironment] = useState(false);
+  const [isTestingLLMSettings, setIsTestingLLMSettings] = useState(false);
   const [isTestingUserSettings, setIsTestingUserSettings] = useState(false);
   const [isTestingYoloEnvironment, setIsTestingYoloEnvironment] = useState(false);
+  const [llmSettingsStatus, setLLMSettingsStatus] = useState("");
   const [userSettingsStatus, setUserSettingsStatus] = useState("");
   const [yoloEnvironmentStatus, setYoloEnvironmentStatus] = useState("");
+  const [testedLLMSettingsKey, setTestedLLMSettingsKey] = useState("");
   const [testedUserSettingsKey, setTestedUserSettingsKey] = useState("");
   const [testedYoloEnvironmentKey, setTestedYoloEnvironmentKey] = useState("");
+  const [savedLLMSettingsKey, setSavedLLMSettingsKey] = useState("");
   const [savedRemoteUserSettingsKey, setSavedRemoteUserSettingsKey] = useState("");
   const [savedYoloEnvironmentKey, setSavedYoloEnvironmentKey] = useState("");
 
@@ -114,14 +166,16 @@ export default function App() {
   const currentSession = sessions.find((session) => session.id === currentSessionId) ?? sessions[0];
   const lastMessage = currentSession.messages[currentSession.messages.length - 1];
   const lastMessageHasVisibleContent = Boolean(lastMessage?.text || lastMessage?.toolCalls?.length);
-  const activeModelLabel =
-    modelOptions.find((option) => option.provider === activeProvider && option.model === activeModel)?.label ??
-    `${activeProvider}: ${activeModel}`;
+  const savedActiveLLMProviderSettings = activeLLMProviderSettings(savedLLMSettings);
+  const activeModelLabel = `${providerLabel(savedLLMSettings.active_provider)}: ${savedActiveLLMProviderSettings.model || "未配置"}`;
 
   const filteredTools = tools.filter((tool) => {
     const query = toolSearchQuery.toLowerCase();
     return tool.name.toLowerCase().includes(query) || tool.description.toLowerCase().includes(query);
   });
+  const isLLMSettingsComplete = isCompleteLLMSettings(llmSettings);
+  const isLLMSettingsTestPassed = testedLLMSettingsKey === llmSettingsKey(llmSettings);
+  const isLLMSettingsSaved = savedLLMSettingsKey === llmSettingsKey(llmSettings);
   const isUserSettingsComplete = isCompleteUserSettings(userSettings);
   const isUserSettingsTestPassed = testedUserSettingsKey === remoteUserSettingsKey(userSettings);
   const isYoloEnvironmentTestPassed =
@@ -200,24 +254,30 @@ export default function App() {
   useEffect(() => {
     let isMounted = true;
 
-    fetchModels()
-      .then((data) => {
+    fetchLLMSettings()
+      .then((settings) => {
         if (!isMounted) return;
-        setModelOptions(data.models);
-        const saved = localStorage.getItem("llmSelection");
-        let defaultSelection = data.default;
-        if (saved) {
-          try {
-            const parsed = JSON.parse(saved);
-            if (typeof parsed?.provider === "string" && typeof parsed?.model === "string") {
-              defaultSelection = parsed;
-            }
-          } catch {
-            localStorage.removeItem("llmSelection");
-          }
+        setLLMSettings(settings);
+        setSavedLLMSettings(settings);
+        setSavedLLMSettingsKey(llmSettingsKey(settings));
+        if (isCompleteLLMSettings(settings)) {
+          setIsTestingLLMSettings(true);
+          setLLMSettingsStatus("正在自动测试当前模型联通...");
+          testLLMSettings(settings)
+            .then((result) => {
+              if (!isMounted) return;
+              setTestedLLMSettingsKey(llmSettingsKey(settings));
+              setLLMSettingsStatus(result.message || "当前模型联通正常");
+            })
+            .catch((error: any) => {
+              if (!isMounted) return;
+              setTestedLLMSettingsKey("");
+              setLLMSettingsStatus(error?.message ?? "当前模型联通测试失败");
+            })
+            .finally(() => {
+              if (isMounted) setIsTestingLLMSettings(false);
+            });
         }
-        setActiveProvider(defaultSelection.provider);
-        setActiveModel(defaultSelection.model);
       })
       .catch((error) => {
         console.error(error);
@@ -416,11 +476,14 @@ export default function App() {
     activeAbortControllerRef.current?.abort();
   };
 
-  const handleModelChange = (value: string) => {
-    const [provider, model] = value.split("::");
-    setActiveProvider(provider);
-    setActiveModel(model);
-    writeStorage("llmSelection", JSON.stringify({ provider, model }));
+  const handleLLMSettingsChange = (nextSettings: LLMSettings) => {
+    const currentKey = llmSettingsKey(llmSettings);
+    const nextKey = llmSettingsKey(nextSettings);
+    setLLMSettings(nextSettings);
+    if (currentKey !== nextKey) {
+      setTestedLLMSettingsKey("");
+      setLLMSettingsStatus("");
+    }
   };
 
   const handleUserSettingsChange = (nextSettings: UserSettings) => {
@@ -462,6 +525,31 @@ export default function App() {
     }
   };
 
+  const handleTestLLMSettings = async () => {
+    if (!isCompleteLLMSettings(llmSettings)) {
+      setTestedLLMSettingsKey("");
+      setLLMSettingsStatus(
+        llmSettings.active_provider === "openrouter"
+          ? "请先填写 Provider、Model、Base URL、API Key"
+          : "请先填写 Provider、Model、Ollama URL",
+      );
+      return;
+    }
+
+    setIsTestingLLMSettings(true);
+    setTestedLLMSettingsKey("");
+    setLLMSettingsStatus("正在测试当前模型联通...");
+    try {
+      const result = await testLLMSettings(llmSettings);
+      setTestedLLMSettingsKey(llmSettingsKey(llmSettings));
+      setLLMSettingsStatus(result.message || "当前模型联通正常");
+    } catch (error: any) {
+      setLLMSettingsStatus(error?.message ?? "当前模型联通测试失败");
+    } finally {
+      setIsTestingLLMSettings(false);
+    }
+  };
+
   const handleTestYoloEnvironment = async () => {
     const envKey = yoloEnvironmentKey(userSettings);
     if (!envKey) {
@@ -498,6 +586,26 @@ export default function App() {
     }
   };
 
+  const handleSaveLLMSettings = async () => {
+    if (!isLLMSettingsTestPassed) {
+      setLLMSettingsStatus("请先测试当前配置，联通正常后再保存");
+      return;
+    }
+
+    setIsSavingLLMSettings(true);
+    try {
+      const savedSettings = await saveLLMSettings(llmSettings);
+      setLLMSettings(savedSettings);
+      setSavedLLMSettings(savedSettings);
+      setSavedLLMSettingsKey(llmSettingsKey(savedSettings));
+      setLLMSettingsStatus("已保存，后续对话会使用该模型配置");
+    } catch (error: any) {
+      setLLMSettingsStatus(error?.message ?? "保存失败");
+    } finally {
+      setIsSavingLLMSettings(false);
+    }
+  };
+
   const handleSaveYoloEnvironment = async () => {
     setIsSavingYoloEnvironment(true);
     try {
@@ -518,7 +626,7 @@ export default function App() {
       stopCurrentTask();
       return;
     }
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || !savedActiveLLMProviderSettings.model.trim()) return;
 
     const sessionId = currentSession.id;
     const userText = input.trim();
@@ -551,8 +659,8 @@ export default function App() {
     try {
       await streamChat(
         {
-          provider: activeProvider,
-          model: activeModel,
+          provider: savedLLMSettings.active_provider,
+          model: savedActiveLLMProviderSettings.model.trim(),
           messages: nextMessages,
           signal: abortController.signal,
         },
@@ -621,6 +729,16 @@ export default function App() {
           onDeleteSession={deleteSession}
           onRenameSession={renameSession}
           activeModelLabel={activeModelLabel}
+          llmSettings={llmSettings}
+          isLLMSettingsComplete={isLLMSettingsComplete}
+          isSavingLLMSettings={isSavingLLMSettings}
+          isTestingLLMSettings={isTestingLLMSettings}
+          isLLMSettingsTestPassed={isLLMSettingsTestPassed}
+          isLLMSettingsSaved={isLLMSettingsSaved}
+          llmSettingsStatus={llmSettingsStatus}
+          onLLMSettingsChange={handleLLMSettingsChange}
+          onTestLLMSettings={handleTestLLMSettings}
+          onSaveLLMSettings={handleSaveLLMSettings}
           userSettings={userSettings}
           isUserSettingsComplete={isUserSettingsComplete}
           isSavingRemoteUserSettings={isSavingRemoteUserSettings}
@@ -649,19 +767,6 @@ export default function App() {
             >
               {isChatSidebarOpen ? <PanelLeftClose className="h-5 w-5" /> : <PanelLeftOpen className="h-5 w-5" />}
             </button>
-
-            <select
-              aria-label="选择 LLM 模型"
-              value={selectionKey(activeProvider, activeModel)}
-              onChange={(event) => handleModelChange(event.target.value)}
-              className="w-auto min-w-0 max-w-[52vw] cursor-pointer appearance-none truncate rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-center text-sm font-medium text-slate-700 shadow-sm backdrop-blur-md transition-colors hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 sm:max-w-[16rem]"
-            >
-              {modelOptions.map((option) => (
-                <option key={selectionKey(option.provider, option.model)} value={selectionKey(option.provider, option.model)}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
           </div>
 
           <div className="absolute right-4 top-4 z-40 rounded-xl border border-slate-200 bg-white/90 p-1 shadow-sm backdrop-blur-md">
@@ -726,7 +831,7 @@ export default function App() {
               <button
                 aria-label={isLoading ? "终止当前任务" : "发送消息"}
                 type="submit"
-                disabled={!input.trim() && !isLoading}
+                disabled={!isLoading && (!input.trim() || !savedActiveLLMProviderSettings.model.trim())}
                 className={`absolute bottom-3 right-3 rounded-full p-2 text-white transition-colors disabled:bg-slate-200 disabled:text-slate-400 ${
                   isLoading ? "bg-rose-600 hover:bg-rose-700" : "bg-indigo-600 hover:bg-indigo-700"
                 }`}

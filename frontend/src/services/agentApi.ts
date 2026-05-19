@@ -1,4 +1,4 @@
-import { AgentStreamEvent, ChatModelOption, UIMessage, UserSettings, UserSettingsTestResult } from "../types";
+import { AgentStreamEvent, ChatModelOption, LLMSettings, UIMessage, UserSettings, UserSettingsTestResult } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -28,6 +28,24 @@ export async function fetchModels(): Promise<{
 
 export async function fetchTools(): Promise<{ tools: any[] }> {
   return requestJson("/api/tools");
+}
+
+export async function fetchLLMSettings(): Promise<LLMSettings> {
+  return requestJson("/api/llm-settings");
+}
+
+export async function saveLLMSettings(settings: LLMSettings): Promise<LLMSettings> {
+  return requestJson("/api/llm-settings", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
+}
+
+export async function testLLMSettings(settings: LLMSettings): Promise<UserSettingsTestResult> {
+  return requestJson("/api/llm-settings/test", {
+    method: "POST",
+    body: JSON.stringify(settings),
+  });
 }
 
 export async function fetchUserSettings(): Promise<UserSettings> {

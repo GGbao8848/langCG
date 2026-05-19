@@ -1,9 +1,5 @@
-import os
-import json
 from functools import lru_cache
 from typing import Any
-from urllib.error import URLError
-from urllib.request import urlopen
 
 from dotenv import load_dotenv
 
@@ -19,94 +15,43 @@ from app.agent.middleware import build_agent_middleware
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.streaming import message_key, message_text, print_tool_calls, print_tool_result
 from app.agent.tool_registry import CHAT_TOOLS
+from app.services.llm_settings import load_llm_settings, validate_llm_settings
 
 
 load_dotenv()
 
-OLLAMA_URL = os.getenv("OLLAMA_URL")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL")
-OPENROUTER_MODELS = os.getenv("OPENROUTER_MODELS")
-OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-
-
-def _split_env_models(value: str | None) -> list[str]:
-    if not value:
-        return []
-    return [item.strip() for item in value.split(",") if item.strip()]
-
-
-def _fetch_ollama_models() -> list[str]:
-    if not OLLAMA_URL:
-        return []
-
-    base_url = OLLAMA_URL.rstrip("/")
-    try:
-        with urlopen(f"{base_url}/api/tags", timeout=2) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except (OSError, URLError, TimeoutError, json.JSONDecodeError):
-        return []
-
-    models = payload.get("models")
-    if not isinstance(models, list):
-        return []
-
-    names: list[str] = []
-    for item in models:
-        if isinstance(item, dict) and isinstance(item.get("name"), str):
-            names.append(item["name"])
-    return names
-
 
 def default_model_selection() -> tuple[str, str]:
-    if OLLAMA_URL:
-        ollama_models = _fetch_ollama_models()
-        if OLLAMA_MODEL:
-            return "ollama", OLLAMA_MODEL
-        if ollama_models:
-            return "ollama", ollama_models[0]
-
-    openrouter_model = OPENROUTER_MODEL or next(iter(_split_env_models(OPENROUTER_MODELS)), "")
-    if OPENROUTER_API_KEY and openrouter_model:
-        return "openrouter", openrouter_model
-    if OLLAMA_MODEL and OLLAMA_URL:
-        return "ollama", OLLAMA_MODEL
-    raise RuntimeError(
-        "未找到可用模型配置。请确认 OLLAMA_URL 可访问且 /api/tags 至少返回一个模型，"
-        "或在 .env 中配置 OLLAMA_URL + OLLAMA_MODEL。"
-    )
+    settings = validate_llm_settings(load_llm_settings())
+    return settings["provider"], settings["model"]
 
 
 def _build_llm(
     provider: str | None = None,
     model: str | None = None,
 ) -> ChatOpenAI | ChatOllama:
+    settings = validate_llm_settings(load_llm_settings())
     if provider is None or model is None:
-        default_provider, default_model = default_model_selection()
+        default_provider, default_model = settings["provider"], settings["model"]
         provider = provider or default_provider
         model = model or default_model
+    if provider != settings["provider"]:
+        raise RuntimeError("当前请求的LLM provider与已保存配置不一致，请在左下角“当前模型”中测试并保存后再试。")
 
     if provider == "openrouter":
-        if not OPENROUTER_API_KEY:
-            raise RuntimeError("OPENROUTER_API_KEY 未配置，无法使用 OpenRouter。")
-
         return ChatOpenAI(
             model=model,
-            api_key=OPENROUTER_API_KEY,
-            base_url=OPENROUTER_BASE_URL,
+            api_key=settings["api_key"],
+            base_url=settings["base_url"],
             temperature=0,
             max_tokens=None,
             stream_usage=False,
         )
 
     if provider == "ollama":
-        if not OLLAMA_URL:
-            raise RuntimeError("OLLAMA_URL 未配置，无法使用 Ollama。")
-
         return ChatOllama(
             model=model,
-            base_url=OLLAMA_URL,
+            base_url=settings["base_url"],
             temperature=0,
             num_ctx=8192,
             num_predict=2048,

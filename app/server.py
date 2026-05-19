@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import hashlib
 from collections.abc import Iterator
 from typing import Any, Literal
-from urllib.error import URLError
-from urllib.request import urlopen
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -18,10 +15,6 @@ from pydantic import BaseModel, Field
 
 from app.agent.middleware import middleware_names
 from app.agent.chat import (
-    OLLAMA_URL,
-    OLLAMA_MODEL,
-    OPENROUTER_MODEL,
-    OPENROUTER_API_KEY,
     default_model_selection,
     get_chat_agent,
 )
@@ -37,6 +30,7 @@ from app.services.user_settings import (
     test_user_settings_connection,
     test_yolo_environment,
 )
+from app.services.llm_settings import active_llm_settings, load_llm_settings, save_llm_settings, test_llm_settings_connection
 
 load_dotenv()
 
@@ -101,6 +95,18 @@ class UserSettings(BaseModel):
     local_yolo_train_venv_path: str = ""
 
 
+class LLMProviderSettings(BaseModel):
+    model: str = ""
+    api_key: str = ""
+    base_url: str = ""
+
+
+class LLMSettings(BaseModel):
+    active_provider: Literal["openrouter", "ollama"] = "ollama"
+    providers: dict[str, LLMProviderSettings] = Field(default_factory=dict)
+    model_options: dict[str, list[str]] = Field(default_factory=dict)
+
+
 app = FastAPI(title="langCG Agent API")
 
 app.add_middleware(
@@ -114,38 +120,6 @@ app.add_middleware(
 )
 
 init_chat_store()
-
-
-def _split_env_list(name: str, fallback: list[str]) -> list[str]:
-    raw = os.getenv(name)
-    if not raw:
-        return [item for item in fallback if item]
-    return [item.strip() for item in raw.split(",") if item.strip()]
-
-
-def _fetch_ollama_models() -> list[str]:
-    if not OLLAMA_URL:
-        return [OLLAMA_MODEL] if OLLAMA_MODEL else []
-
-    base_url = OLLAMA_URL.rstrip("/")
-    try:
-        with urlopen(f"{base_url}/api/tags", timeout=2) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except (OSError, URLError, TimeoutError, json.JSONDecodeError):
-        return [OLLAMA_MODEL] if OLLAMA_MODEL else []
-
-    models = payload.get("models")
-    if not isinstance(models, list):
-        return [OLLAMA_MODEL] if OLLAMA_MODEL else []
-
-    names = []
-    for item in models:
-        if isinstance(item, dict) and isinstance(item.get("name"), str):
-            names.append(item["name"])
-
-    if OLLAMA_MODEL and OLLAMA_MODEL not in names:
-        names.insert(0, OLLAMA_MODEL)
-    return names
 
 
 def _to_langchain_messages(messages: list[ChatMessageIn]) -> list[BaseMessage]:
@@ -577,36 +551,50 @@ def health() -> dict[str, str]:
 
 @app.get("/api/models")
 def models() -> dict[str, Any]:
-    openrouter_models = (
-        _split_env_list(
-            "OPENROUTER_MODELS",
-            [OPENROUTER_MODEL or "", "openrouter/auto", "google/gemini-2.5-flash"],
-        )
-        if OPENROUTER_API_KEY
-        else []
+    settings = load_llm_settings()
+    active = active_llm_settings(settings)
+    default_provider = active["provider"]
+    default_model = active["model"]
+    model_options_by_provider = settings.get("model_options") or {}
+    model_options = (
+        [
+            {
+                "provider": provider,
+                "model": model,
+                "label": f"{'OpenRouter' if provider == 'openrouter' else 'Ollama'}: {model}",
+            }
+            for provider, models_for_provider in model_options_by_provider.items()
+            for model in models_for_provider
+        ]
     )
-    ollama_models = _fetch_ollama_models()
-    try:
-        default_provider, default_model = default_model_selection()
-    except RuntimeError:
-        default_provider = "ollama" if OLLAMA_URL else "openrouter"
-        default_model = (
-            OLLAMA_MODEL
-            or next(iter(ollama_models), "")
-            or next(iter(openrouter_models), "")
-        )
 
     return {
         "default": {"provider": default_provider, "model": default_model},
-        "models": [
-            {"provider": "openrouter", "model": model, "label": f"OpenRouter: {model}"}
-            for model in openrouter_models
-        ]
-        + [
-            {"provider": "ollama", "model": model, "label": f"Ollama: {model}"}
-            for model in ollama_models
-        ],
+        "models": model_options,
     }
+
+
+@app.get("/api/llm-settings")
+def get_llm_settings() -> dict[str, Any]:
+    return load_llm_settings()
+
+
+@app.put("/api/llm-settings")
+def put_llm_settings(settings: LLMSettings) -> dict[str, Any]:
+    try:
+        saved = save_llm_settings(settings.model_dump(mode="json"))
+        get_chat_agent.cache_clear()
+        return saved
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@app.post("/api/llm-settings/test")
+def test_llm_settings(settings: LLMSettings) -> dict[str, Any]:
+    try:
+        return test_llm_settings_connection(settings.model_dump(mode="json"))
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @app.get("/api/tools")
