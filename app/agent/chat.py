@@ -56,7 +56,7 @@ def _build_llm(
             num_ctx=8192,
             num_predict=2048,
             repeat_penalty=1.05,
-            keep_alive="30m",
+            keep_alive="5m",
             client_kwargs={"trust_env": False, "timeout": 120},
             sync_client_kwargs={"trust_env": False, "timeout": 120},
             async_client_kwargs={"trust_env": False, "timeout": 120},
